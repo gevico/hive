@@ -93,7 +93,7 @@ Hive 通过 `launch` 配置支持不同的 agent 工具：
 | 通信方向 | 机制 |
 |---------|------|
 | Layer 0 → Layer 1 | Rust CLI 写入 `.hive/tasks/<task_id>/spec.md`，包含验收标准、上下文文件列表、依赖关系 |
-| Layer 1 → Layer 2 | `hive launch` 通过 CLI 参数传入 `--task <task_id>`，agent 从 spec.md + plan.md 读取任务规格 |
+| Layer 1 → Layer 2 | `hive launch` 通过 CLI 参数传入 `--task <task_id>`，agent 从 `specs/<id>.md` + `tasks/<id>/plan.md` 读取任务规格 |
 | Layer 2 → Layer 1 | Worker 完成后写入 `.hive/tasks/<task_id>/result.md`，git commit 到 worktree 分支 |
 | Layer 1 → Layer 0 | `hive report` 读取 result.md，更新全局 `state.md` + 任务 `audit.md` |
 | 失败上报 | Worker 写 result.md 标记 `failed` + 原因，Layer 1 上报给 Layer 0 决策重试/跳过/人工介入 |
@@ -137,48 +137,64 @@ liyi-9a8b7c6d
 ```
 .hive/
 ├── config.yml                       # 全局配置（提交）
-├── config.local.yml                 # 个人配置（gitignore，hive init 创建）
+├── config.local.yml                 # 个人配置（gitignore）
 ├── state.md                         # 全局任务状态表（gitignore）
-├── report.md                        # 最终审计报告（提交，hive audit 生成）
-├── plan/
+│
+├── specs/                           # 提交 — 任务契约（RFC 阶段提交）
+│   ├── chao-a1b2c3d4.md             # Task: auth middleware
+│   └── chao-f5e6d7c8.md             # Task: route handlers
+│
+├── reports/                         # 提交 — 审计报告（完成后生成）
+│   ├── chao-a1b2c3d4.md             # Draft: user auth system
+│   └── liyi-9a8b7c6d.md             # Draft: logging pipeline
+│
+├── plans/                           # gitignore — 决策过程
 │   ├── chao-a1b2c3d4/               # Draft: user auth system
-│   │   ├── requirements.md          # 该需求的澄清记录
-│   │   └── convergence.md           # 该需求的决策过程记录
-│   ├── chao-f5e6d7c8/               # Draft: payment integration
 │   │   ├── requirements.md
 │   │   └── convergence.md
 │   └── ...
-├── tasks/
-│   ├── chao-a1b2c3d4/
-│   │   ├── spec.md                  # 任务规格（提交）
-│   │   ├── plan.md                  # 实施计划（提交）
-│   │   ├── result.md                # 执行结果（提交）
-│   │   └── audit.md                 # 审计日志（按审计等级决定）
+│
+├── tasks/                           # gitignore — 工作文件
+│   ├── chao-a1b2c3d4/               # Task: auth middleware
+│   │   ├── plan.md                  # 实施步骤
+│   │   ├── result.md                # 执行结果
+│   │   └── audit.md                 # 审计日志
 │   └── ...
-└── worktrees/                       # worktree 路径记录（gitignore）
+│
+└── worktrees/                       # gitignore — 临时路径
 ```
+
+三个顶层目录各司其职：
+
+| 目录 | 提交 | 内容 | 生命周期 |
+|------|------|------|---------|
+| `specs/` | ✓ | 做什么（验收标准、依赖、复杂度） | RFC 阶段创建 |
+| `reports/` | ✓ | 做了什么（per-draft 聚合审计报告） | 完成后生成 |
+| `plans/` | ✗ | 为什么这样做（需求澄清、决策过程） | 规划阶段 |
+| `tasks/` | ✗ | 怎么做 + 过程（plan、result、audit） | 执行阶段 |
 
 ### 5.1 文件提交规则
 
 | 文件 | 提交 | 说明 |
 |------|------|------|
 | `config.yml` | ✓ | 团队共享配置 |
-| `config.local.yml` | ✗ | 个人信息和偏好 |
-| `state.md` | ✗ | 运行时临时状态 |
-| `report.md` | ✓ | 最终审计报告 |
-| `tasks/*/spec.md` | ✓ | 任务契约 |
-| `tasks/*/plan.md` | ✓ | 实施方案 |
-| `tasks/*/result.md` | ✓ | 执行结果 |
-| `plan/` | ✗ | 需求澄清和决策过程，本地参考 |
-| `tasks/*/audit.md` | 按等级 | minimal/standard 不提交，full 提交 |
+| `config.local.yml` | ✗ | 个人配置 |
+| `specs/*.md` | ✓ | 任务契约（RFC 审查对象） |
+| `reports/*.md` | ✓ | 审计报告（完成证明） |
+| `state.md` | ✗ | 运行时状态 |
+| `plans/` | ✗ | 决策过程，本地参考 |
+| `tasks/` | ✗ | 工作文件，聚合到 report |
 | `worktrees/` | ✗ | 临时路径 |
+
+仓库里只留**契约（specs）和证明（reports）**。
 
 ### 5.2 .gitignore
 
 ```gitignore
 config.local.yml
 state.md
-plan/
+plans/
+tasks/
 worktrees/
 ```
 
@@ -275,7 +291,7 @@ $ hive init
   ├─ 1. 检查当前目录是否为 git 仓库，不是则报错退出
   │
   ├─ 2. 创建 .hive/ 目录结构
-  │     mkdir -p .hive/{plan,tasks,worktrees}
+  │     mkdir -p .hive/{specs,reports,plans,tasks,worktrees}
   │
   ├─ 3. 生成 .hive/config.yml
   │     写入全局配置模板（含所有选项 + # 注释说明可选值）
@@ -288,7 +304,8 @@ $ hive init
   │     追加以下条目（如不存在）：
   │     .hive/config.local.yml
   │     .hive/state.md
-  │     .hive/plan/
+  │     .hive/plans/
+  │     .hive/tasks/
   │     .hive/worktrees/
   │
   └─ 6. 输出初始化摘要
@@ -398,7 +415,7 @@ Agent 工具（Claude Code / Codex / ...）
        ↕ CLI 调用
   hive plan CLI（Rust 状态机）
        ↕ 文件读写
-  .hive/plan/<draft_id>/
+  .hive/plans/<draft_id>/
 ```
 
 - `hive plan next` — 返回当前 phase 和下一步动作（该问什么问题、该生成什么方案）
@@ -421,7 +438,7 @@ Agent 工具（Claude Code / Codex / ...）
 - 逐个提问（≥3 个问题）
 - 优先多选题，降低用户负担
 - 追问直到需求无歧义
-- 产出：`.hive/plan/<draft_id>/requirements.md`（gitignore，本地决策参考）
+- 产出：`.hive/plans/<draft_id>/requirements.md`（gitignore，本地决策参考）
 
 ### Phase 3: 提出 2-3 种方案
 
@@ -439,7 +456,7 @@ Agent 工具（Claude Code / Codex / ...）
   - 连续 2 轮分歧不减少 → 提交用户裁决
   - 达到最大轮次 → 提交用户裁决
 - 逐段呈现设计，每段确认
-- 产出：`.hive/plan/<draft_id>/convergence.md`（gitignore，本地决策参考）
+- 产出：`.hive/plans/<draft_id>/convergence.md`（gitignore，本地决策参考）
 
 ### Phase 5: 自审
 
@@ -453,10 +470,10 @@ Agent 工具（Claude Code / Codex / ...）
 
 分两步：
 
-1. **Hive 分解**：将收敛后的设计分解为 task 列表，每个 task 生成 `spec.md`（目标、验收标准、上下文文件、复杂度、依赖关系）
-2. **Humanize gen-plan**：对每个 task，将 spec.md 作为输入调用 `humanize:gen-plan` 生成 `plan.md`，确保 100% 符合 humanize 格式，可直接被 `humanize:start-rlcr-loop` 执行
+1. **Hive 分解**：将收敛后的设计分解为 task 列表，每个 task 生成 `.hive/specs/<id>.md`（目标、验收标准、上下文文件、复杂度、依赖关系）
+2. **Plan 生成**：对每个 task，将 spec 作为输入调用可配置的 plan 生成工具（如 `humanize:gen-plan`）生成 `.hive/tasks/<id>/plan.md`
 
-产出：`.hive/tasks/<id>/spec.md` + `plan.md`
+产出：`.hive/specs/<id>.md`（提交）+ `.hive/tasks/<id>/plan.md`（gitignore）
 
 ### Phase 7: 用户审批
 
@@ -469,9 +486,10 @@ Agent 工具（Claude Code / Codex / ...）
 
 ## 9. 任务文件格式
 
-### 9.1 spec.md
+### 9.1 specs/<id>.md
 
 ```markdown
+# .hive/specs/chao-a1b2c3d4.md
 ---
 id: chao-a1b2c3d4
 draft_id: chao-b7c8d9e0
@@ -495,9 +513,10 @@ Implement user authentication middleware
 - src/routes/auth.rs
 ```
 
-### 9.2 result.md
+### 9.2 tasks/<id>/result.md
 
 ```markdown
+# .hive/tasks/chao-a1b2c3d4/result.md
 ---
 id: chao-a1b2c3d4
 status: completed
@@ -636,7 +655,7 @@ main
 ```
 hive rfc --task <id>
     │
-    ├─ 1. 将 spec.md + plan.md 提交到 hive/<task_id> 分支
+    ├─ 1. 将 .hive/specs/<id>.md 提交到 hive/<task_id> 分支
     ├─ 2. gh pr create --title "RFC: <task goal>" --label rfc
     ├─ 3. plan_status: draft → rfc
     └─ 4. 输出 PR 链接
@@ -645,6 +664,8 @@ hive rfc --all
     │
     └─ 对所有 draft 状态的任务批量创建 RFC PR
 ```
+
+RFC 只提交 spec（做什么），不提交 plan（怎么做）。团队审查的是目标和验收标准，实施细节由执行者决定。
 
 ### 12.2 Plan 状态流转
 
@@ -715,10 +736,12 @@ Merged to main, commit: e4f5g6h
 
 ### 13.3 最终审计报告
 
-所有任务完成后，`hive audit` 聚合生成项目级总报告：
+某个 draft 的所有任务完成后，`hive audit --draft <id>` 聚合生成 per-draft 报告：
 
 ```markdown
+# .hive/reports/chao-b7c8d9e0.md
 ---
+draft_id: chao-b7c8d9e0
 project: user-auth-system
 started: 2026-04-13 09:30
 completed: 2026-04-13 14:22
@@ -757,7 +780,8 @@ audit_level: standard
 2. **Convergence disagreement #4** — User chose Claude's approach for error handling
 
 ## Artifacts
-- Per-task details: .hive/tasks/*/
+- Task specs: .hive/specs/
+- Per-task work files: .hive/tasks/
 ```
 
 ### 13.4 审计写入权限
@@ -780,10 +804,10 @@ hive <command> [options]
 | `hive init` | 初始化仓库（见 Section 6.3） | 环境准备 |
 | `hive config [--show]` | 查看/修改配置（显示合并后生效值及来源） | 环境准备 |
 | `hive plan --input <file>` | 启动计划生成流程（7 阶段） | 规划 |
-| `hive rfc --task <id> \| --all` | 提交 spec+plan 到仓库并创建 RFC PR | 审查 |
+| `hive rfc --task <id> \| --all` | 提交 spec 到仓库并创建 RFC PR | 审查 |
 | `hive exec` | 按计划调度执行所有 approved 任务 | 执行 |
 | `hive status` | 查看全局状态（任务表 + 进度） | 监控 |
-| `hive audit` | 生成最终审计报告 `.hive/report.md` | 报告 |
+| `hive audit --draft <id>` | 生成 per-draft 审计报告到 `.hive/reports/` | 报告 |
 | `hive merge --task <id> \| --all` | 合并已完成任务（支持 `--mode pr`） | 集成 |
 | `hive abort` | 终止所有运行中的 agent，保留 worktree 供复盘 | 应急 |
 | `hive doctor` | 检查环境（git、claude、humanize、配置的模型等） | 诊断 |
@@ -794,8 +818,8 @@ hive <command> [options]
 |------|------|
 | `hive claim --task <id>` | 领取任务，pending → assigned |
 | `hive isolate --task <id>` | 创建 worktree + 任务分支，记录 base_commit |
-| `hive launch --task <id>` | 在 worktree 中启动 Claude Code agent + humanize RLCR |
-| `hive check --task <id>` | 最终验收：对照 spec.md 验收标准逐项验证 |
+| `hive launch --task <id>` | 在 worktree 中启动配置的 agent 工具 + 质量循环 |
+| `hive check --task <id>` | 最终验收：对照 `specs/<id>.md` 验收标准逐项验证 |
 | `hive report --task <id>` | 读取 result.md，更新 state.md + audit.md |
 | `hive retry --task <id>` | 清理 worktree，重置任务为 pending |
 | `hive cleanup --task <id>` | 删除已合并任务的 worktree |
@@ -877,7 +901,7 @@ my-agent --task chao-a1b2c3d4 --worktree .hive/worktrees/chao-a1b2c3d4
 git checkout <base_commit>
 # cherry-pick 依赖任务的变更
 git cherry-pick <依赖任务的 merge commits>
-# 用相同的 spec.md + plan.md 重新执行
+# 用相同的 specs/<id>.md + tasks/<id>/plan.md 重新执行
 hive retry --task <id>
 ```
 
@@ -895,13 +919,13 @@ hive plan (Layer 0)
     ├─ Phase 3: 提出 2-3 种方案
     ├─ Phase 4: 收敛式设计 → convergence.md
     ├─ Phase 5: 自审
-    ├─ Phase 6: 任务分解 → spec.md
-    │           调用 humanize:gen-plan → plan.md
+    ├─ Phase 6: 任务分解 → specs/<id>.md
+    │           Plan 生成 → tasks/<id>/plan.md
     └─ Phase 7: 用户审批
     │
     ▼
 hive rfc (可选，团队审查)
-    ├─ 提交 spec.md + plan.md
+    ├─ 提交 specs/<id>.md
     └─ 创建 RFC PR → 团队 review → approved
     │
     ▼
@@ -928,6 +952,6 @@ hive merge --all (集成)
     └─ 每个任务一个 PR（团队模式）
     │
     ▼
-hive audit (审计报告)
-    └─ 聚合生成 report.md
+hive audit --draft <id> (审计报告)
+    └─ 聚合生成 reports/<draft_id>.md
 ```
