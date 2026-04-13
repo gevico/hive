@@ -420,3 +420,88 @@ fn check_command_verifier_records_stderr_detail() {
         "check-results.md should contain stderr detail, got: {results}"
     );
 }
+
+#[test]
+fn check_manual_verifier_records_rejection_reason() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "check-manual-task";
+
+    repo.write_task(
+        task_id,
+        "draft-manual",
+        TaskState::Review,
+        "verify-manual: Does the output look correct?",
+    );
+
+    // Run hive check with stdin piped: "n\nmy rejection reason\n"
+    let hive_bin = env!("CARGO_BIN_EXE_hive");
+    let mut child = std::process::Command::new(hive_bin)
+        .args(["check", "--task", task_id])
+        .current_dir(&repo.root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    // Write rejection to stdin
+    {
+        use std::io::Write;
+        let stdin = child.stdin.as_mut().unwrap();
+        writeln!(stdin, "n").unwrap();
+        writeln!(stdin, "my rejection reason").unwrap();
+    }
+
+    let output = child.wait_with_output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "check should exit 1 on manual rejection");
+
+    let results_path = repo.paths.task_dir(task_id).join("check-results.md");
+    let results = std::fs::read_to_string(&results_path).unwrap_or_default();
+    assert!(
+        results.contains("reason:") || results.contains("my rejection reason"),
+        "check-results.md should contain manual rejection reason, got: {results}"
+    );
+}
+
+#[test]
+fn doctor_detects_tampered_audit() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "tamper-task";
+
+    // Create a task and write some audit entries via the CLI path
+    repo.write_task(task_id, "draft-tamper", TaskState::InProgress, "");
+
+    // Write a legitimate audit entry
+    hive_audit::log_state_change(
+        &repo.paths.audit_file(task_id),
+        hive_core::config::AuditLevel::Standard,
+        task_id,
+        "pending",
+        "assigned",
+    )
+    .unwrap();
+
+    // Verify doctor passes on untampered file
+    let output1 = repo.run_hive(&["doctor"]);
+    let stdout1 = String::from_utf8_lossy(&output1.stdout);
+    assert!(
+        !stdout1.contains("invalid integrity hash"),
+        "untampered audit should pass doctor"
+    );
+
+    // Now tamper with the audit file: rewrite content but preserve format
+    let audit_path = repo.paths.audit_file(task_id);
+    let content = std::fs::read_to_string(&audit_path).unwrap();
+    let tampered = content.replace("pending -> assigned", "pending -> TAMPERED");
+    std::fs::write(&audit_path, &tampered).unwrap();
+
+    // Doctor should detect the tampering via integrity hash mismatch
+    let output2 = repo.run_hive(&["doctor"]);
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout2.contains("invalid integrity hash"),
+        "tampered audit should be detected by doctor, got: {stdout2}"
+    );
+}

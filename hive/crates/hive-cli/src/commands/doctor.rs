@@ -154,6 +154,18 @@ pub fn run() -> Result<()> {
             if content.is_empty() {
                 continue;
             }
+            // Verify integrity hash (detects content rewrite even if format is preserved)
+            match hive_audit::verify_integrity(&audit_path) {
+                Ok(true) => {}
+                Ok(false) => {
+                    println!(
+                        "[warn] audit file for {} has invalid integrity hash (content was modified)",
+                        s.task_id
+                    );
+                    warnings += 1;
+                }
+                Err(_) => {}
+            }
             // Check CLI-written header
             if !content.starts_with("# Audit Log") {
                 println!(
