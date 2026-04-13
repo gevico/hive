@@ -4,19 +4,20 @@
 
 ### 1.1 定位
 
-Hive 是一个面向小团队（2-3 人）的 Claude Code 多代理编排插件。它融合了 AgentX 的三层架构（分解、隔离、并行）和 Humanize 的 RLCR 质量循环，实现"Hive 负责编排调度，Humanize 负责实现质量"的协作模式。
+Hive 是一个 **Agent 工具无关的多代理编排框架**，面向团队协作场景。它融合了 AgentX 的三层架构（分解、隔离、并行）和 Humanize 的 RLCR 质量循环。核心是独立的 Rust CLI，通过薄适配层嵌入各种 AI 编码工具（Claude Code、Codex CLI、OpenCode 等），实现"Hive 负责编排调度，Agent 工具负责实现质量"的协作模式。
 
 ### 1.2 核心理念
 
 - **约束层硬编码**：所有角色限制、状态转换规则、隔离边界用 Rust 实现，不依赖自然语言提示词
 - **蜂巢式协作**：每个代理在独立的 worktree（蜂室）中自由工作，编排器（蜂后）只做调度和验收
 - **冲突不是错误**：并行开发必然产生冲突，Hive 的职责是按正确顺序合并并尽量自动解决
+- **Agent 工具无关**：Hive 只通过 CLI 接口和文件系统通信，不绑定任何特定 AI 编码工具
 
 ### 1.3 技术选型
 
 - **实现语言**：Rust，编译为单二进制分发
-- **插件形态**：Claude Code 插件（skills / agents / hooks）
-- **质量保证**：复用 Humanize 插件的 RLCR 循环
+- **架构**：独立 Rust CLI 为核心，针对不同 agent 工具提供薄适配层（Claude Code skill、Codex hook 等）
+- **质量保证**：可插拔质量循环（Humanize RLCR、Codex 内置审查、自定义等）
 - **模型策略**：可插拔模型层，默认 Claude，可配置其他模型
 - **不包含**：可视化仪表盘（不需要 viz）
 
@@ -42,9 +43,9 @@ Layer 1: 子代理层 (Rust CLI 硬编码命令)
 ├─ hive report   — 上报结构化结果
 ⛔ 硬编码约束层，非自然语言
 
-Layer 2: 实现层 (Claude Code agent in worktree)
+Layer 2: 实现层 (Agent tool in worktree — Claude Code / Codex / OpenCode / 其他)
 ├─ 写代码、跑测试、git commit
-├─ 通过 humanize RLCR 保证实现质量
+├─ 通过可配置的质量循环保证实现质量（如 humanize RLCR、Codex 内置审查等）
 ├─ worktree 内完全自由（完全执行权限）
 ⛔ 不能跨 worktree，不能碰主分支
 ```
@@ -55,18 +56,29 @@ Layer 2: 实现层 (Claude Code agent in worktree)
 |------|---------|-----------|
 | Layer 0 编排器 | 规划、分解、调度、审计、RLCR 轮次控制、模型路由 | 写代码、改文件、操作任何 worktree 内容 |
 | Layer 1 子代理 | 创建/销毁 worktree、启动/停止 agent、验收验证、上报结果 | 绕过状态机、跳跃状态转换 |
-| Layer 2 实现者 | 在自己的 worktree 内完全自由（读写文件、执行命令、git commit、跑测试、安装依赖等） | 访问其他 agent 的 worktree、操作主分支 |
+| Layer 2 实现者 | 在自己的 worktree 内完全自由（读写文件、执行命令、git commit、跑测试、安装依赖等），可以是任何 agent 工具 | 访问其他 agent 的 worktree、操作主分支 |
 
-### 2.2 Hive 与 Humanize 的职责分工
+### 2.2 Hive 与 Agent 工具的职责分工
 
-| 阶段 | Hive (Layer 0/1) | Humanize (Layer 2) |
-|------|------------------|-------------------|
+| 阶段 | Hive (Layer 0/1) | Agent 工具 (Layer 2) |
+|------|------------------|---------------------|
 | 需求 → 设计 → 分解 | ✓ | — |
-| spec → plan | 提供输入 | `gen-plan` 生成 humanize 格式 plan |
-| plan → 实现 | 调度、启动 agent | `start-rlcr-loop` 执行 |
-| 过程审查 | — | RLCR 内部自动调用 codex 审查 |
+| spec → plan | 提供输入 | 可配置的 plan 生成（如 humanize `gen-plan`） |
+| plan → 实现 | 调度、启动 agent | 可配置的质量循环（如 humanize RLCR、Codex 内置审查） |
+| 过程审查 | — | Agent 工具内部处理 |
 | 最终验收 | `hive check` 验证验收标准 | — |
 | 合并 | `hive merge` | — |
+
+### 2.3 Agent 工具适配
+
+Hive 通过 `launch` 配置支持不同的 agent 工具：
+
+| Agent 工具 | launch.tool | 质量循环 | 适配方式 |
+|-----------|-------------|---------|---------|
+| Claude Code | `claude` | humanize RLCR | Claude Code skill |
+| Codex CLI | `codex` | Codex 内置审查 | Codex hook |
+| OpenCode | `opencode` | 自定义 | CLI 调用 |
+| 自定义 | `custom` | 自定义 | 用户提供启动命令 |
 
 ---
 
@@ -96,7 +108,7 @@ Layer 2: 实现层 (Claude Code agent in worktree)
 
 格式：`<user_name>-<content_hash>`
 
-- `user_name`：从 `git config user.email` 自动提取 `@` 前的部分，可在 `config.local.md` 中覆盖
+- `user_name`：从 `git config user.email` 自动提取 `@` 前的部分，可在 `config.local.yml` 中覆盖
 - `content_hash`：spec 内容的 `sha256[:8]`，由 `hive plan` 创建任务时自动计算
 
 示例：
@@ -124,17 +136,22 @@ liyi-9a8b7c6d
 
 ```
 .hive/
-├── config.md                        # 全局配置（提交）
-├── config.local.md                  # 个人配置（gitignore）
+├── config.yml                       # 全局配置（提交）
+├── config.local.yml                 # 个人配置（gitignore，hive init 创建）
 ├── state.md                         # 全局任务状态表（gitignore）
 ├── report.md                        # 最终审计报告（提交，hive audit 生成）
 ├── plan/
-│   ├── requirements.md              # 项目级需求澄清记录（gitignore）
-│   └── convergence.md               # 项目级决策过程记录（gitignore）
+│   ├── chao-a1b2c3d4/               # Draft: user auth system
+│   │   ├── requirements.md          # 该需求的澄清记录
+│   │   └── convergence.md           # 该需求的决策过程记录
+│   ├── chao-f5e6d7c8/               # Draft: payment integration
+│   │   ├── requirements.md
+│   │   └── convergence.md
+│   └── ...
 ├── tasks/
 │   ├── chao-a1b2c3d4/
 │   │   ├── spec.md                  # 任务规格（提交）
-│   │   ├── plan.md                  # 实施计划，humanize 格式（提交）
+│   │   ├── plan.md                  # 实施计划（提交）
 │   │   ├── result.md                # 执行结果（提交）
 │   │   └── audit.md                 # 审计日志（按审计等级决定）
 │   └── ...
@@ -145,22 +162,21 @@ liyi-9a8b7c6d
 
 | 文件 | 提交 | 说明 |
 |------|------|------|
-| `config.md` | ✓ | 团队共享配置 |
-| `config.local.md` | ✗ | 个人信息和偏好 |
+| `config.yml` | ✓ | 团队共享配置 |
+| `config.local.yml` | ✗ | 个人信息和偏好 |
 | `state.md` | ✗ | 运行时临时状态 |
 | `report.md` | ✓ | 最终审计报告 |
 | `tasks/*/spec.md` | ✓ | 任务契约 |
 | `tasks/*/plan.md` | ✓ | 实施方案 |
 | `tasks/*/result.md` | ✓ | 执行结果 |
-| `plan/requirements.md` | ✗ | 项目级需求澄清，本地决策参考 |
-| `plan/convergence.md` | ✗ | 项目级决策过程，本地决策参考 |
+| `plan/` | ✗ | 需求澄清和决策过程，本地参考 |
 | `tasks/*/audit.md` | 按等级 | minimal/standard 不提交，full 提交 |
 | `worktrees/` | ✗ | 临时路径 |
 
 ### 5.2 .gitignore
 
 ```gitignore
-config.local.md
+config.local.yml
 state.md
 plan/
 worktrees/
@@ -172,55 +188,119 @@ worktrees/
 
 ### 6.1 双层配置
 
-```markdown
-# .hive/config.md（全局，提交到仓库）
----
+`hive init` 自动创建以下两个配置文件。
+
+```yaml
+# .hive/config.yml (global, committed to repo)
+
+# Audit level: minimal | standard | full
 audit_level: standard
+
 merge:
+  # Conflict resolution: auto | manual
   conflict_strategy: auto
+  # Merge mode: direct | pr
   mode: pr
+  # Rebase task branch onto main before merge
   rebase_before_merge: true
+
+# Max retry attempts before marking task as blocked
 retry_limit: 3
 
+# Agent tool and quality loop configuration
+launch:
+  # Agent tool: claude | codex | opencode | custom
+  tool: claude
+  # Quality loop: humanize | codex-builtin | none
+  quality_loop: humanize
+  # Custom launch command (only used when tool: custom)
+  # custom_command: "my-agent --task {task_id} --worktree {worktree_path}"
+
+# Model binding for each role
+# Format: <agent_tool>-<model>-<version>, e.g. claude-opus-4-6, codex-gpt-5-4
 agents:
-  planner: claude-opus-4-6
-  convergence: codex-gpt-5-4
-  worker: claude-sonnet-4-6
-  reviewer: codex-gpt-5-4
----
+  # Layer 0: planning and convergence
+  planner: claude-opus-4-6         # drives interactive planning (Phase 1-5)
+  convergence: codex-gpt-5-4       # second model for plan convergence (Phase 4)
+  # Layer 2: implementation and review
+  worker: claude-sonnet-4-6        # executes tasks in worktrees
+  reviewer: codex-gpt-5-4          # final acceptance review (hive check)
 ```
 
-```markdown
-# .hive/config.local.md（个人，gitignore）
----
+```yaml
+# .hive/config.local.yml (personal, gitignored)
+# Overrides config.yml on a per-field basis.
+# Created by `hive init` with values from git config.
+
 user:
-  name: chao
+  # Auto-populated from: git config user.email (part before @)
+  name: zevorn
+  # Auto-populated from: git config user.email
   email: chao.liu.zevorn@gmail.com
 
-agents:
-  worker: claude-opus-4-6
-  reviewer: codex-gpt-5-4
----
+# Override any global config field, e.g.:
+# agents:
+#   worker: claude-opus-4-6        # use opus locally instead of sonnet
+#   reviewer: codex-gpt-5-4
+# launch:
+#   tool: codex                    # use codex locally instead of claude
+#   quality_loop: codex-builtin
 ```
 
 ### 6.2 合并规则
 
-逐字段深度合并，`config.local.md` 优先：
+逐字段深度合并，`config.local.yml` 优先：
 
 ```
-最终生效配置 = deep_merge(config.md, config.local.md)
+最终生效配置 = deep_merge(config.yml, config.local.yml)
 ```
 
 `hive config --show` 查看合并后的实际生效配置，标注每个字段来源：
 
 ```
-audit_level: standard            (global)
-agents.worker: claude-opus-4-6   (local override)
-agents.reviewer: codex-gpt-5-4   (global)
-agents.planner: claude-opus-4-6  (global)
+audit_level: standard              (global)
+launch.tool: claude                (global)
+launch.quality_loop: humanize      (global)
+agents.planner: claude-opus-4-6    (global)
+agents.convergence: codex-gpt-5-4  (global)
+agents.worker: claude-opus-4-6     (local override)
+agents.reviewer: codex-gpt-5-4     (global)
 ```
 
-### 6.3 Agent 命名规则
+### 6.3 `hive init` 初始化行为
+
+```
+$ hive init
+  │
+  ├─ 1. 检查当前目录是否为 git 仓库，不是则报错退出
+  │
+  ├─ 2. 创建 .hive/ 目录结构
+  │     mkdir -p .hive/{plan,tasks,worktrees}
+  │
+  ├─ 3. 生成 .hive/config.yml
+  │     写入全局配置模板（含所有选项 + # 注释说明可选值）
+  │
+  ├─ 4. 生成 .hive/config.local.yml
+  │     从 git config 自动填充 user.name 和 user.email
+  │     其余字段以注释形式列出供用户按需启用
+  │
+  ├─ 5. 更新项目根目录 .gitignore
+  │     追加以下条目（如不存在）：
+  │     .hive/config.local.yml
+  │     .hive/state.md
+  │     .hive/plan/
+  │     .hive/worktrees/
+  │
+  └─ 6. 输出初始化摘要
+        Created: .hive/config.yml
+        Created: .hive/config.local.yml (user: chao)
+        Updated: .gitignore
+        Run `hive doctor` to verify environment.
+```
+
+如果 `.hive/` 已存在，`hive init` 不会覆盖现有配置，仅补全缺失的文件和目录。
+
+### 6.4 Agent 命名规则
 
 格式：`<agent工具>-<模型>-<版本>`，版本号之间用 `-` 连接。
 
@@ -307,7 +387,27 @@ draft → rfc → approved → executing → done
 
 ## 8. 计划生成流程
 
-参考 superpowers brainstorming 的结构化设计流程，分 7 个阶段：
+参考 superpowers brainstorming 的结构化设计流程，分 7 个阶段。
+
+`hive plan` 的交互通过**状态机驱动的对话流程**实现。Rust CLI 不自己做问答，而是作为状态机后端，与前端 agent 工具配合：
+
+```
+Agent 工具（Claude Code / Codex / ...）
+       ↕ 对话界面
+     用户
+       ↕ CLI 调用
+  hive plan CLI（Rust 状态机）
+       ↕ 文件读写
+  .hive/plan/<draft_id>/
+```
+
+- `hive plan next` — 返回当前 phase 和下一步动作（该问什么问题、该生成什么方案）
+- `hive plan answer --draft <id> --phase <n> --response "..."` — 提交用户回答，推进状态机
+- `hive plan status --draft <id>` — 查看当前 draft 的进度
+
+这使得 Hive 的计划流程可以嵌入任何支持对话的 agent 工具，不绑定特定平台。
+
+每次 `hive plan` 创建一个独立的 draft（`<user>-<content_hash>`），不同需求各自独立。
 
 ### Phase 1: 探索上下文
 
@@ -321,7 +421,7 @@ draft → rfc → approved → executing → done
 - 逐个提问（≥3 个问题）
 - 优先多选题，降低用户负担
 - 追问直到需求无歧义
-- 产出：`.hive/plan/requirements.md`（gitignore，本地决策参考）
+- 产出：`.hive/plan/<draft_id>/requirements.md`（gitignore，本地决策参考）
 
 ### Phase 3: 提出 2-3 种方案
 
@@ -339,7 +439,7 @@ draft → rfc → approved → executing → done
   - 连续 2 轮分歧不减少 → 提交用户裁决
   - 达到最大轮次 → 提交用户裁决
 - 逐段呈现设计，每段确认
-- 产出：`.hive/plan/convergence.md`（gitignore，本地决策参考）
+- 产出：`.hive/plan/<draft_id>/convergence.md`（gitignore，本地决策参考）
 
 ### Phase 5: 自审
 
@@ -374,6 +474,7 @@ draft → rfc → approved → executing → done
 ```markdown
 ---
 id: chao-a1b2c3d4
+draft_id: chao-b7c8d9e0
 status: pending
 plan_status: draft
 depends_on: []
@@ -676,7 +777,7 @@ hive <command> [options]
 
 | 命令 | 作用 | 阶段 |
 |------|------|------|
-| `hive init` | 初始化 `.hive/` 目录结构 + 配置 + .gitignore | 环境准备 |
+| `hive init` | 初始化仓库（见 Section 6.3） | 环境准备 |
 | `hive config [--show]` | 查看/修改配置（显示合并后生效值及来源） | 环境准备 |
 | `hive plan --input <file>` | 启动计划生成流程（7 阶段） | 规划 |
 | `hive rfc --task <id> \| --all` | 提交 spec+plan 到仓库并创建 RFC PR | 审查 |
@@ -737,18 +838,26 @@ $ hive audit
 
 ### 14.5 `hive launch` 内部行为
 
+根据 `launch.tool` 配置选择对应的启动方式：
+
 ```bash
+# tool: claude (with humanize quality loop)
 cd .hive/worktrees/chao-a1b2c3d4
-
-# 将 humanize 格式的 plan 放入 worktree
 cp .hive/tasks/chao-a1b2c3d4/plan.md .humanize/plan.md
-
-# 启动 Claude Code，调用 humanize RLCR
 claude --agent-prompt "Execute the plan using humanize:start-rlcr-loop --max 5" \
        --plugin humanize
 
-# agent 完成后将结果写入 .hive/tasks/chao-a1b2c3d4/result.md
+# tool: codex (with codex-builtin quality loop)
+cd .hive/worktrees/chao-a1b2c3d4
+codex --approval-mode full-auto \
+      --prompt "$(cat .hive/tasks/chao-a1b2c3d4/plan.md)"
+
+# tool: custom
+cd .hive/worktrees/chao-a1b2c3d4
+my-agent --task chao-a1b2c3d4 --worktree .hive/worktrees/chao-a1b2c3d4
 ```
+
+所有工具的共同约定：agent 完成后将结果写入 `.hive/tasks/<task_id>/result.md`。
 
 ---
 
@@ -801,9 +910,9 @@ hive exec (Layer 1 调度)
     │                                   │
     │                                   ▼
     │                          Layer 2: worktree 内
-    │                          humanize:start-rlcr-loop
+    │                          Agent 工具 + 质量循环
     │                              ├─ 实现代码
-    │                              ├─ codex 审查（humanize 内部）
+    │                              ├─ 过程审查（Agent 工具内部）
     │                              ├─ 修复 → 循环
     │                              └─ 写 result.md
     │                                   │
