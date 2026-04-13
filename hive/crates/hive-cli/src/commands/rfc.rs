@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use hive_core::config;
 use hive_core::storage::{self, HivePaths};
 use hive_core::task::ApprovalStatus;
@@ -20,12 +20,15 @@ pub fn run(draft_id: String) -> Result<()> {
         for entry in std::fs::read_dir(&specs_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md")
-                && let Ok(content) = std::fs::read_to_string(&path)
-                    && let Ok(spec) = hive_core::task::parse_spec(&content)
-                        && spec.draft_id == draft_id {
-                            draft_specs.push((spec.id.clone(), spec));
-                        }
+            if path.extension().is_some_and(|e| e == "md") {
+                let content = std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read spec: {}", path.display()))?;
+                let spec = hive_core::task::parse_spec(&content)
+                    .with_context(|| format!("invalid spec: {}", path.display()))?;
+                if spec.draft_id == draft_id {
+                    draft_specs.push((spec.id.clone(), spec));
+                }
+            }
         }
     }
 
@@ -33,14 +36,16 @@ pub fn run(draft_id: String) -> Result<()> {
         bail!("no specs found for draft {draft_id}");
     }
 
-    // Check approval state from state.json if it exists, otherwise treat as draft
-    for (task_id, _) in &draft_specs {
-        if let Ok(state) = storage::read_task_state(&paths, task_id)
-            && (state.approval_status == ApprovalStatus::Rfc
-                || state.approval_status == ApprovalStatus::Approved)
-            {
-                bail!("draft {draft_id} already in '{}' state", state.approval_status);
-            }
+    // Check approval state: prefer state.json, fall back to spec frontmatter
+    for (task_id, spec) in &draft_specs {
+        let approval = if let Ok(state) = storage::read_task_state(&paths, task_id) {
+            state.approval_status
+        } else {
+            spec.approval_status
+        };
+        if approval == ApprovalStatus::Rfc || approval == ApprovalStatus::Approved {
+            bail!("draft {draft_id} already in '{approval}' state");
+        }
     }
 
     // Validate plans exist for all specs

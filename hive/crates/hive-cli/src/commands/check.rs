@@ -60,20 +60,28 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
     let mut all_pass = true;
     let mut results_log = String::from("# Verification Results\n\n");
     for criterion in &criteria {
-        let result = match criterion {
-            Criterion::Command(cmd) => verify_command(&wt_path, cmd),
-            Criterion::File { path, pattern } => verify_file(&wt_path, path, pattern.as_deref()),
+        // Each verifier returns (passed, optional_rejection_reason)
+        let result: Result<(bool, Option<String>)> = match criterion {
+            Criterion::Command(cmd) => verify_command(&wt_path, cmd).map(|b| (b, None)),
+            Criterion::File { path, pattern } => {
+                verify_file(&wt_path, path, pattern.as_deref()).map(|b| (b, None))
+            }
             Criterion::Manual(desc) => verify_manual(desc),
         };
 
         match result {
-            Ok(true) => {
+            Ok((true, _)) => {
                 println!("  PASS: {criterion}");
                 results_log.push_str(&format!("- PASS: {criterion}\n"));
             }
-            Ok(false) => {
+            Ok((false, reason)) => {
+                let detail = reason.as_deref().unwrap_or("");
                 println!("  FAIL: {criterion}");
-                results_log.push_str(&format!("- FAIL: {criterion}\n"));
+                if detail.is_empty() {
+                    results_log.push_str(&format!("- FAIL: {criterion}\n"));
+                } else {
+                    results_log.push_str(&format!("- FAIL: {criterion} (reason: {detail})\n"));
+                }
                 all_pass = false;
             }
             Err(e) => {
@@ -169,11 +177,29 @@ fn verify_file(worktree: &std::path::Path, path: &str, pattern: Option<&str>) ->
     }
 }
 
-fn verify_manual(desc: &str) -> Result<bool> {
+/// Returns (passed, rejection_reason).
+fn verify_manual(desc: &str) -> Result<(bool, Option<String>)> {
     eprint!("manual verification: {desc} [y/n]? ");
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_lowercase().starts_with('y'))
+    let trimmed = input.trim();
+    if trimmed.to_lowercase().starts_with('y') {
+        Ok((true, None))
+    } else {
+        // Capture rejection reason
+        eprint!("rejection reason (optional): ");
+        let mut reason = String::new();
+        std::io::stdin().read_line(&mut reason)?;
+        let reason = reason.trim().to_string();
+        Ok((
+            false,
+            if reason.is_empty() {
+                Some("rejected without reason".into())
+            } else {
+                Some(reason)
+            },
+        ))
+    }
 }
 
 #[cfg(test)]

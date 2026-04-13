@@ -117,6 +117,7 @@ const SPEC_KNOWN_FIELDS: &[&str] = &[
     "complexity",
     "approval_status",
     "schema_version",
+    "rlcr_max_rounds",
     "skills",
     "exclude_skills",
 ];
@@ -157,6 +158,16 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
     let depends_on = fm.optional_string_list("depends_on")?.unwrap_or_default();
     let skills = fm.optional_string_list("skills")?.unwrap_or_default();
     let exclude_skills = fm.optional_string_list("exclude_skills")?.unwrap_or_default();
+
+    // Validate rlcr_max_rounds if present: must not exceed complexity mapping
+    if let Some(max_rounds) = fm.get_u32("rlcr_max_rounds") {
+        let limit = complexity.rlcr_max_rounds();
+        if max_rounds > limit {
+            return Err(HiveError::ConstraintViolation(format!(
+                "rlcr_max_rounds {max_rounds} exceeds complexity {complexity} limit {limit}"
+            )));
+        }
+    }
 
     Ok(Spec {
         id,

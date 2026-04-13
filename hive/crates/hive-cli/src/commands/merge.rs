@@ -189,7 +189,7 @@ fn topological_sort(deps: &HashMap<String, Vec<String>>) -> Vec<String> {
     for node in deps.keys() {
         topo_dfs(node, deps, &mut visited, &mut order);
     }
-    order.reverse();
+    // DFS post-order naturally gives dependencies before dependents — no reverse needed
     order
 }
 

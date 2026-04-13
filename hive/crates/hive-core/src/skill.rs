@@ -82,10 +82,22 @@ fn try_load_skill(base: &Path, name: &str) -> Option<SkillInfo> {
     let content = std::fs::read_to_string(&skill_md).ok()?;
     let fm = frontmatter::parse(&content).ok()?;
 
+    // Validate schema version (required for all frontmatter per AC-16)
+    if let Err(e) = frontmatter::validate_schema_version(&fm) {
+        eprintln!("warning: skill at {}: {e}, skipping", skill_md.display());
+        return None;
+    }
+
+    // Warn about unknown fields
+    frontmatter::warn_unknown_fields(
+        &fm,
+        &["name", "description", "schema_version"],
+    );
+
     let skill_name = fm.get_str("name")?.to_string();
     let description = fm.get_str("description")?.to_string();
 
-    // Validate name is required and matches directory
+    // Validate name characters
     if !is_valid_skill_name(&skill_name) {
         eprintln!("warning: skill '{skill_name}' has invalid name characters, skipping");
         return None;

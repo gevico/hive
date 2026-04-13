@@ -112,7 +112,29 @@ pub fn run() -> Result<()> {
     }
 
     // Check state consistency: state.json is authoritative
-    let states = storage::load_all_states(&paths).unwrap_or_default();
+    // First, try to detect corrupt state.json files
+    let tasks_dir_for_state = paths.tasks_dir();
+    let mut states = Vec::new();
+    if tasks_dir_for_state.exists() {
+        for entry in std::fs::read_dir(&tasks_dir_for_state)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                let state_json = entry.path().join("state.json");
+                if state_json.exists() {
+                    match storage::read_task_state(&paths, entry.file_name().to_str().unwrap_or("?")) {
+                        Ok(s) => states.push(s),
+                        Err(e) => {
+                            println!(
+                                "[error] corrupt state.json for task {}: {e}",
+                                entry.file_name().to_string_lossy()
+                            );
+                            errors += 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
     for s in &states {
         let spec_path = paths.spec_file(&s.task_id);
         if !spec_path.exists() {
