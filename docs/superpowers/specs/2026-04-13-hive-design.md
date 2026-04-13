@@ -1,10 +1,10 @@
-# Hive（蜂巢） — 多代理编排框架设计方案
+# Hive（蜂巢） — 多代理编排 Harness 设计方案
 
 ## 1. 项目概述
 
 ### 1.1 定位
 
-Hive 是一个 **Agent 工具无关的多代理编排框架**，面向团队协作场景。它被设计为三层架构（分解、隔离、并行）和 Humanize 的 RLCR 质量循环。核心是独立的 Rust CLI，通过薄适配层嵌入各种 AI 编码工具（Claude Code、Codex CLI、OpenCode 等），实现"Hive 负责编排调度，Agent 工具负责实现质量"的协作模式。
+Hive 是一个 **Agent 工具无关的多代理编排 Harness**，面向团队协作场景。它被设计为三层架构（分解、隔离、并行）和 Humanize 的 RLCR 质量循环。核心是独立的 Rust CLI，通过薄适配层嵌入各种 AI 编码工具（Claude Code、Codex CLI、OpenCode 等），实现"Hive 负责编排调度，Agent 工具负责实现质量"的协作模式。
 
 ### 1.2 核心理念
 
