@@ -13,6 +13,7 @@ mod launch;
 mod list_tasks;
 mod merge;
 mod report;
+mod retry;
 mod rfc;
 mod runtime;
 mod show;
@@ -110,6 +111,13 @@ pub enum Command {
         task: String,
     },
 
+    /// Retry a failed task
+    Retry {
+        /// Task ID
+        #[arg(long)]
+        task: String,
+    },
+
     /// Clean up worktree after task completion
     Cleanup {
         /// Task ID
@@ -159,6 +167,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Command::Claim { task } => claim::run(task),
         Command::Isolate { task } => isolate::run(task),
         Command::Launch { task } => launch::run(task),
+        Command::Retry { task } => retry::run(task),
         Command::Cleanup { task } => cleanup::run(task),
         Command::Doctor => doctor::run(),
         Command::Graph => graph::run(),

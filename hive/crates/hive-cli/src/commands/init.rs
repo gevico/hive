@@ -148,7 +148,7 @@ fn detect_and_generate_adapters(repo_root: &Path, paths: &HivePaths) -> Result<(
         eprintln!("warning: neither claude nor codex CLI detected, using generic fallback");
     }
 
-    install_humanize_plugin(paths, has_claude, has_codex)?;
+    install_humanize_plugin(repo_root, paths, has_claude, has_codex)?;
 
     Ok(())
 }
@@ -180,9 +180,35 @@ fn generate_claude_adapter(repo_root: &Path) -> Result<()> {
         ("status", "Show task status"),
         ("merge", "Merge completed tasks"),
         ("audit", "Query audit log"),
+        ("skill", "Manage skills"),
         ("doctor", "Diagnose project health"),
+        ("graph", "Display dependency graph"),
         ("rfc", "Generate RFC document"),
     ];
+
+    // Generate orchestrator guard hook
+    let guard_hook = plugin_dir.join("orchestrator-guard.sh");
+    if !guard_hook.exists() {
+        std::fs::write(
+            &guard_hook,
+            "#!/usr/bin/env bash\n\
+             # Orchestrator guard hook: blocks Write/Edit/NotebookEdit when HIVE_ROLE=orchestrator\n\
+             if [ \"$HIVE_ROLE\" = \"orchestrator\" ]; then\n\
+             \tTOOL=\"$1\"\n\
+             \tcase \"$TOOL\" in\n\
+             \t\tWrite|Edit|NotebookEdit)\n\
+             \t\t\techo \"BLOCKED: orchestrator must not write files directly\" >&2\n\
+             \t\t\texit 2\n\
+             \t\t\t;;\n\
+             \tesac\n\
+             fi\n",
+        )?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&guard_hook, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
 
     for (name, desc) in skills {
         let skill_path = plugin_dir.join(format!("hive-{name}.md"));
@@ -216,8 +242,27 @@ fn generate_codex_adapter(repo_root: &Path) -> Result<()> {
              - `hive check --task <id>` -- Verify acceptance criteria\n\
              - `hive report --task <id>` -- Process task results\n\
              - `hive merge --task <id>` -- Merge completed task branches\n\
-             - `hive doctor` -- Diagnose project health\n",
+             - `hive retry --task <id>` -- Retry a failed task\n\
+             - `hive doctor` -- Diagnose project health\n\
+             - `hive audit` -- Query audit log\n\
+             - `hive graph` -- Display task dependency graph\n\n\
+             ## Working with Tasks\n\n\
+             Each task runs in an isolated git worktree. Do not modify files outside your assigned worktree.\n",
         )?;
+    }
+
+    // Generate hooks.json
+    let hooks_path = codex_dir.join("hooks.json");
+    if !hooks_path.exists() {
+        let hooks = serde_json::json!({
+            "hooks": [
+                {
+                    "event": "pre-tool-use",
+                    "command": "if [ \"$HIVE_ROLE\" = \"orchestrator\" ] && echo \"$TOOL_NAME\" | grep -qE '^(Write|Edit|NotebookEdit)$'; then echo 'BLOCKED: orchestrator must not write files' >&2; exit 2; fi"
+                }
+            ]
+        });
+        std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks)?)?;
     }
 
     Ok(())
@@ -239,22 +284,52 @@ fn generate_generic_adapter(paths: &HivePaths) -> Result<()> {
     Ok(())
 }
 
-fn install_humanize_plugin(paths: &HivePaths, has_claude: bool, has_codex: bool) -> Result<()> {
-    if has_claude || has_codex {
-        // Adapter generation already handles plugin references
-        return Ok(());
-    }
-
-    // Generic fallback: install to .hive/skills/humanize/
+fn install_humanize_plugin(
+    repo_root: &Path,
+    paths: &HivePaths,
+    has_claude: bool,
+    has_codex: bool,
+) -> Result<()> {
+    // Always install to .hive/skills/humanize/ for all agent tools
     let humanize_dir = paths.skills_dir().join("humanize");
     if !humanize_dir.exists() {
         std::fs::create_dir_all(&humanize_dir)?;
         std::fs::write(
             humanize_dir.join("SKILL.md"),
             "---\nname: humanize\ndescription: Humanize RLCR quality loop integration\n---\n\n\
-             Default humanize plugin for quality assurance.\n",
+             Default humanize plugin for quality assurance workflows.\n",
         )?;
-        println!("installed humanize plugin to .hive/skills/humanize/");
+    }
+
+    // For Claude Code: register in plugin.json
+    if has_claude {
+        let plugin_json_path = repo_root.join(".claude-plugin/plugin.json");
+        if plugin_json_path.exists() {
+            // Plugin reference is already in the generated adapter
+            println!("humanize: registered for Claude Code");
+        }
+    }
+
+    // For Codex: merge into instructions
+    if has_codex {
+        let instructions_path = repo_root.join(".codex/instructions.md");
+        if instructions_path.exists() {
+            let content = std::fs::read_to_string(&instructions_path)?;
+            if !content.contains("humanize") {
+                let mut updated = content;
+                updated.push_str(
+                    "\n## Humanize Integration\n\n\
+                     This project uses the humanize RLCR quality loop.\n\
+                     Use `gen-plan` for plan generation and `start-rlcr-loop` for iterative development.\n",
+                );
+                std::fs::write(&instructions_path, updated)?;
+            }
+            println!("humanize: merged into Codex instructions");
+        }
+    }
+
+    if !has_claude && !has_codex {
+        println!("humanize: installed to .hive/skills/humanize/");
     }
 
     Ok(())

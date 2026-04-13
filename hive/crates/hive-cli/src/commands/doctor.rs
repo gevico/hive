@@ -77,7 +77,8 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Check stale locks
+    // Check stale locks (5-minute threshold per design)
+    let stale_threshold = std::time::Duration::from_secs(5 * 60);
     let tasks_dir = paths.tasks_dir();
     if tasks_dir.exists() {
         for entry in std::fs::read_dir(&tasks_dir)? {
@@ -91,18 +92,26 @@ pub fn run() -> Result<()> {
                 {
                     let alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
                     if !alive {
-                        println!(
-                            "[warn] stale lock: {} (pid {pid} dead)",
-                            lock_path.display()
-                        );
-                        warnings += 1;
+                        let age = std::fs::metadata(&lock_path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
+                        if let Some(age) = age
+                            && age > stale_threshold {
+                                println!(
+                                    "[warn] stale lock: {} (pid {pid} dead, age {:.0}s > 300s)",
+                                    lock_path.display(),
+                                    age.as_secs_f64()
+                                );
+                                warnings += 1;
+                            }
                     }
                 }
             }
         }
     }
 
-    // Check state consistency
+    // Check state consistency: state.json is authoritative
     let states = storage::load_all_states(&paths).unwrap_or_default();
     for s in &states {
         let spec_path = paths.spec_file(&s.task_id);
@@ -110,6 +119,28 @@ pub fn run() -> Result<()> {
             println!("[error] missing spec for task {}", s.task_id);
             errors += 1;
         }
+    }
+
+    // Report state.md vs state.json authority
+    let state_md_path = paths.state_md();
+    if state_md_path.exists() {
+        println!("[ok] state.md exists (derived view; state.json is authoritative)");
+    }
+
+    // Check audit append-only integrity
+    for s in &states {
+        let audit_path = paths.audit_file(&s.task_id);
+        if audit_path.exists()
+            && let Ok(content) = std::fs::read_to_string(&audit_path) {
+                // Verify it starts with "# Audit Log" header (CLI-written)
+                if !content.starts_with("# Audit Log") && !content.is_empty() {
+                    println!(
+                        "[warn] audit file for {} may have been modified externally (missing header)",
+                        s.task_id
+                    );
+                    warnings += 1;
+                }
+            }
     }
 
     // Check for orphaned worktrees

@@ -113,50 +113,56 @@ pub fn run(draft_id: String) -> Result<()> {
         storage::write_task_state(&paths, &state)?;
     }
 
-    // Optionally create PR
+    // Commit RFC to branch (always, regardless of platform)
+    let rfc_branch = format!("hive/rfc/{draft_id}");
+    let _ = std::process::Command::new("git")
+        .args(["checkout", "-b", &rfc_branch])
+        .current_dir(&cwd)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["add", &rfc_path.to_string_lossy()])
+        .current_dir(&cwd)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["commit", "-m", &format!("rfc: {draft_id}")])
+        .current_dir(&cwd)
+        .output();
+
+    // Create PR if platform supports it
     let hive_config = config::load_config(&paths.hive_dir())?;
     let platform = merge::Platform::parse(&hive_config.rfc.platform);
 
-    if platform == merge::Platform::Github {
-        match merge::check_tool_available("gh") {
-            Ok(()) => {
-                // Commit RFC to branch and create PR
-                let rfc_branch = format!("hive/rfc/{draft_id}");
-                let _ = std::process::Command::new("git")
-                    .args(["checkout", "-b", &rfc_branch])
-                    .current_dir(&cwd)
-                    .output();
-                let _ = std::process::Command::new("git")
-                    .args(["add", &rfc_path.to_string_lossy()])
-                    .current_dir(&cwd)
-                    .output();
-                let _ = std::process::Command::new("git")
-                    .args(["commit", "-m", &format!("rfc: {draft_id}")])
-                    .current_dir(&cwd)
-                    .output();
-                let _ = std::process::Command::new("git")
-                    .args(["push", "-u", "origin", &rfc_branch])
-                    .current_dir(&cwd)
-                    .output();
+    match platform {
+        merge::Platform::Github => {
+            match merge::check_tool_available("gh") {
+                Ok(()) => {
+                    let _ = std::process::Command::new("git")
+                        .args(["push", "-u", "origin", &rfc_branch])
+                        .current_dir(&cwd)
+                        .output();
 
-                let url = merge::create_pr(
-                    &cwd,
-                    &platform,
-                    &rfc_branch,
-                    &format!("RFC: {draft_id}"),
-                    &rfc_content,
-                    &["rfc"],
-                )?;
-                if let Some(url) = url {
-                    println!("RFC PR created: {url}");
+                    let url = merge::create_pr(
+                        &cwd,
+                        &platform,
+                        &rfc_branch,
+                        &format!("RFC: {draft_id}"),
+                        &rfc_content,
+                        &["rfc"],
+                    )?;
+                    if let Some(url) = url {
+                        println!("RFC PR created: {url}");
+                    }
+                }
+                Err(_) => {
+                    bail!(
+                        "rfc.platform is 'github' but 'gh' CLI not found. \
+                         Set platform: none in config.yml to skip PR creation"
+                    );
                 }
             }
-            Err(_) => {
-                bail!(
-                    "rfc.platform is 'github' but 'gh' CLI not found. \
-                     Set platform: none in config.yml to skip PR creation"
-                );
-            }
+        }
+        _ => {
+            println!("RFC committed to branch {rfc_branch}");
         }
     }
 

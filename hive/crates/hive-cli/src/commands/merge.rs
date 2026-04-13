@@ -1,5 +1,9 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Result, bail};
 use hive_core::config;
+use hive_core::lock::FileLock;
+use hive_core::state::{TaskState, TransitionAction};
 use hive_core::storage::{self, HivePaths};
 use hive_git::{branch, merge, worktree};
 
@@ -29,7 +33,7 @@ fn merge_task(
     mode: &str,
 ) -> Result<()> {
     let state = storage::read_task_state(paths, task_id)?;
-    if state.state != hive_core::TaskState::Completed {
+    if state.state != TaskState::Completed {
         bail!(
             "task {} is in state '{}', must be 'completed' to merge",
             task_id,
@@ -37,15 +41,52 @@ fn merge_task(
         );
     }
 
+    // Verify dependencies are already merged (their worktrees cleaned up)
+    let spec_path = paths.spec_file(task_id);
+    if let Ok(content) = std::fs::read_to_string(&spec_path)
+        && let Ok(spec) = hive_core::task::parse_spec(&content) {
+            for dep in &spec.depends_on {
+                let dep_state = storage::read_task_state(paths, dep)?;
+                if dep_state.state != TaskState::Completed {
+                    bail!(
+                        "cannot merge {task_id}: dependency {dep} is in state '{}'",
+                        dep_state.state
+                    );
+                }
+            }
+        }
+
     let task_branch = worktree::branch_name(task_id);
     let default = branch::default_branch(repo_root)?;
 
-    // Rebase onto main
-    branch::rebase(repo_root, &task_branch, &default)?;
+    // Rebase onto main — conflict transitions task to blocked
+    if branch::rebase(repo_root, &task_branch, &default).is_err() {
+        eprintln!("task {task_id}: rebase conflict, marking as blocked");
+        let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
+        let mut state = storage::read_task_state(paths, task_id)?;
+        state.state = state
+            .state
+            .transition(TransitionAction::Fail, state.retry_count, true)?;
+        state.state = state
+            .state
+            .transition(TransitionAction::Block, state.retry_count, true)?;
+        state.touch();
+        storage::write_task_state(paths, &state)?;
+        bail!("merge conflict in task {task_id}, task blocked for manual resolution");
+    }
+
+    // Log audit
+    if let Ok(cfg) = config::load_config(&paths.hive_dir()) {
+        let _ = hive_audit::log_merge(
+            &paths.audit_file(task_id),
+            cfg.audit_level,
+            task_id,
+            &format!("merged via {mode}"),
+        );
+    }
 
     match mode {
         "direct" => {
-            // Checkout default and merge
             let _ = std::process::Command::new("git")
                 .args(["checkout", &default])
                 .current_dir(repo_root)
@@ -57,7 +98,6 @@ fn merge_task(
             let hive_config = config::load_config(&paths.hive_dir())?;
             let platform = merge::Platform::parse(&hive_config.rfc.platform);
 
-            // Push branch
             let _ = std::process::Command::new("git")
                 .args(["push", "-u", "origin", &task_branch])
                 .current_dir(repo_root)
@@ -87,7 +127,7 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
     let states = storage::load_all_states(paths)?;
     let completed: Vec<_> = states
         .iter()
-        .filter(|s| s.state == hive_core::TaskState::Completed)
+        .filter(|s| s.state == TaskState::Completed)
         .collect();
 
     if completed.is_empty() {
@@ -95,13 +135,60 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
         return Ok(());
     }
 
-    // TODO: dependency-ordered merge
-    for s in completed {
-        match merge_task(repo_root, paths, &s.task_id, mode) {
+    // Build dependency graph and topological sort for merge order
+    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
+    for s in &completed {
+        let spec_path = paths.spec_file(&s.task_id);
+        let dep_list = if let Ok(content) = std::fs::read_to_string(&spec_path) {
+            hive_core::task::parse_spec(&content)
+                .map(|spec| spec.depends_on)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        deps.insert(s.task_id.clone(), dep_list);
+    }
+
+    let order = topological_sort(&deps);
+    let task_ids: HashSet<String> = completed.iter().map(|s| s.task_id.clone()).collect();
+
+    for task_id in &order {
+        if !task_ids.contains(task_id) {
+            continue;
+        }
+        match merge_task(repo_root, paths, task_id, mode) {
             Ok(()) => {}
-            Err(e) => eprintln!("failed to merge {}: {e}", s.task_id),
+            Err(e) => eprintln!("failed to merge {task_id}: {e}"),
         }
     }
 
     Ok(())
+}
+
+fn topological_sort(deps: &HashMap<String, Vec<String>>) -> Vec<String> {
+    let mut visited = HashSet::new();
+    let mut order = Vec::new();
+    for node in deps.keys() {
+        topo_dfs(node, deps, &mut visited, &mut order);
+    }
+    order.reverse();
+    order
+}
+
+fn topo_dfs(
+    node: &str,
+    deps: &HashMap<String, Vec<String>>,
+    visited: &mut HashSet<String>,
+    order: &mut Vec<String>,
+) {
+    if visited.contains(node) {
+        return;
+    }
+    visited.insert(node.to_string());
+    if let Some(children) = deps.get(node) {
+        for child in children {
+            topo_dfs(child, deps, visited, order);
+        }
+    }
+    order.push(node.to_string());
 }

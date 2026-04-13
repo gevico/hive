@@ -58,6 +58,29 @@ fn launch_task_inner(paths: &HivePaths, task_id: &str, acquire_lock: bool) -> Re
     let plan_path = paths.plan_file(&state.draft_id, task_id);
     let plan_content = std::fs::read_to_string(&plan_path).ok();
 
+    // Load spec for context injection
+    let spec_path = paths.spec_file(task_id);
+    let spec_content = std::fs::read_to_string(&spec_path).ok();
+    let spec = spec_content
+        .as_deref()
+        .and_then(|c| hive_core::task::parse_spec(c).ok());
+
+    // Load and resolve skills
+    let (task_skills, exclude) = match &spec {
+        Some(s) => (s.skills.clone(), s.exclude_skills.clone()),
+        None => (Vec::new(), Vec::new()),
+    };
+    let user_skills_dir = dirs_next::config_dir().map(|d| d.join("hive/skills"));
+    let loaded_skills = hive_core::skill::discover_skills(
+        &paths.skills_dir(),
+        user_skills_dir.as_deref(),
+        &hive_config.skills.default,
+        &task_skills,
+        &exclude,
+    )
+    .unwrap_or_default();
+    let skill_context = hive_core::skill::build_skill_context(&loaded_skills);
+
     let custom_command = match tool.as_str() {
         "claude" => {
             check_tool_available("claude")?;
@@ -86,9 +109,21 @@ fn launch_task_inner(paths: &HivePaths, task_id: &str, acquire_lock: bool) -> Re
     storage::write_task_state(paths, &state)?;
     runtime::log_state_change(paths, task_id, &from_state, &state.state.to_string())?;
 
+    // Build full context for agent
+    let mut context = String::new();
+    if let Some(ref spec) = spec {
+        context.push_str(&format!("## Task Spec\n\n{}\n\n", spec.body));
+    }
+    if let Some(ref plan) = plan_content {
+        context.push_str(&format!("## Implementation Plan\n\n{plan}\n\n"));
+    }
+    if !skill_context.is_empty() {
+        context.push_str(&format!("## Loaded Skills\n\n{skill_context}\n"));
+    }
+
     match tool.as_str() {
-        "claude" => launch_claude(&wt_path, task_id, plan_content.as_deref())?,
-        "codex" => launch_codex(&wt_path, task_id, plan_content.as_deref())?,
+        "claude" => launch_claude(&wt_path, task_id, &context)?,
+        "codex" => launch_codex(&wt_path, task_id, &context)?,
         "custom" => {
             let cmd = custom_command.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("custom launch requires launch.custom_command in config")
@@ -101,11 +136,8 @@ fn launch_task_inner(paths: &HivePaths, task_id: &str, acquire_lock: bool) -> Re
     Ok(())
 }
 
-fn launch_claude(worktree: &std::path::Path, task_id: &str, plan: Option<&str>) -> Result<()> {
-    let mut prompt = format!("Execute task {task_id}.");
-    if let Some(plan) = plan {
-        prompt.push_str(&format!("\n\nPlan:\n{plan}"));
-    }
+fn launch_claude(worktree: &std::path::Path, task_id: &str, context: &str) -> Result<()> {
+    let prompt = format!("Execute task {task_id}.\n\n{context}");
 
     let status = Command::new("claude")
         .args(["--print", &prompt])
@@ -119,11 +151,8 @@ fn launch_claude(worktree: &std::path::Path, task_id: &str, plan: Option<&str>) 
     ensure_result_file(worktree, task_id)
 }
 
-fn launch_codex(worktree: &std::path::Path, task_id: &str, plan: Option<&str>) -> Result<()> {
-    let mut prompt = format!("Execute task {task_id}.");
-    if let Some(plan) = plan {
-        prompt.push_str(&format!("\n\nPlan:\n{plan}"));
-    }
+fn launch_codex(worktree: &std::path::Path, task_id: &str, context: &str) -> Result<()> {
+    let prompt = format!("Execute task {task_id}.\n\n{context}");
 
     let status = Command::new("codex")
         .args(["exec", "--approval-mode", "full-auto", &prompt])

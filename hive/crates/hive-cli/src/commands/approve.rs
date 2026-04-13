@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
+use hive_core::config;
 use hive_core::storage::{self, HivePaths};
 use hive_core::task::ApprovalStatus;
+use hive_git::merge;
 
 pub fn run(draft_id: String) -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -16,6 +18,25 @@ pub fn run(draft_id: String) -> Result<()> {
     if draft_tasks.is_empty() {
         bail!("draft not found: {draft_id}");
     }
+
+    // GitHub advisory check: warn if RFC PR is not merged
+    let hive_config = config::load_config(&paths.hive_dir())?;
+    if hive_config.rfc.platform == "github"
+        && merge::check_tool_available("gh").is_ok() {
+            let rfc_branch = format!("hive/rfc/{draft_id}");
+            let output = std::process::Command::new("gh")
+                .args(["pr", "view", &rfc_branch, "--json", "state", "-q", ".state"])
+                .output();
+            if let Ok(o) = output
+                && o.status.success() {
+                    let state = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if state != "MERGED" {
+                        eprintln!(
+                            "advisory: RFC PR for {draft_id} is in state '{state}', not merged"
+                        );
+                    }
+                }
+        }
 
     // Idempotent: already approved is fine
     let mut count = 0;

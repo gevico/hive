@@ -59,6 +59,8 @@ pub struct Spec {
     pub complexity: Complexity,
     pub approval_status: ApprovalStatus,
     pub schema_version: u32,
+    pub skills: Vec<String>,
+    pub exclude_skills: Vec<String>,
     pub goal: String,
     pub body: String,
 }
@@ -153,6 +155,8 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
     };
 
     let depends_on = fm.optional_string_list("depends_on")?.unwrap_or_default();
+    let skills = fm.optional_string_list("skills")?.unwrap_or_default();
+    let exclude_skills = fm.optional_string_list("exclude_skills")?.unwrap_or_default();
 
     Ok(Spec {
         id,
@@ -161,6 +165,8 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
         complexity,
         approval_status,
         schema_version,
+        skills,
+        exclude_skills,
         goal: String::new(),
         body: fm.body,
     })
