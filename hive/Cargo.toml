@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hive-cli",
+    "crates/hive-core",
+    "crates/hive-git",
+    "crates/hive-audit",
+    "crates/hive-adapter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+hive-core = { path = "crates/hive-core" }
+hive-git = { path = "crates/hive-git" }
+hive-audit = { path = "crates/hive-audit" }
+hive-adapter = { path = "crates/hive-adapter" }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+thiserror = "2"
+anyhow = "1"
+ulid = "1"
+chrono = { version = "0.4", features = ["serde"] }

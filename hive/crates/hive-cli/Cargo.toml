@@ -1,0 +1,17 @@
+[package]
+name = "hive-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "hive"
+path = "src/main.rs"
+
+[dependencies]
+hive-core = { workspace = true }
+hive-git = { workspace = true }
+hive-audit = { workspace = true }
+hive-adapter = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }

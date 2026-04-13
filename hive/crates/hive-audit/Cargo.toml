@@ -1,0 +1,13 @@
+[package]
+name = "hive-audit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hive-core = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

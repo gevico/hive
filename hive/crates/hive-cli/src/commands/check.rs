@@ -1,0 +1,159 @@
+use std::process::Command;
+
+use anyhow::{Result, bail};
+use hive_core::storage::{self, HivePaths};
+
+// Exit codes per AC-10
+const EXIT_ALL_PASS: i32 = 0;
+const EXIT_SOME_FAIL: i32 = 1;
+const EXIT_SPEC_NOT_FOUND: i32 = 2;
+const EXIT_WRONG_STATE: i32 = 3;
+
+pub fn run(task_id: String) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let paths = HivePaths::new(&cwd);
+
+    if !paths.hive_dir().exists() {
+        bail!("not a hive project. Run `hive init` first");
+    }
+
+    let state = storage::read_task_state(&paths, &task_id)?;
+
+    if state.state != hive_core::TaskState::Review {
+        eprintln!(
+            "error: task {} is in state '{}', must be 'review' to check",
+            task_id, state.state
+        );
+        std::process::exit(EXIT_WRONG_STATE);
+    }
+
+    let spec_path = paths.spec_file(&task_id);
+    let spec_content = match std::fs::read_to_string(&spec_path) {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("error: spec not found for task {task_id}");
+            std::process::exit(EXIT_SPEC_NOT_FOUND);
+        }
+    };
+
+    let spec = hive_core::task::parse_spec(&spec_content)?;
+    let wt_path = paths.worktree_path(&task_id);
+
+    let criteria = parse_criteria(&spec.body);
+    if criteria.is_empty() {
+        println!("task {task_id}: no verifiable criteria found in spec");
+        std::process::exit(EXIT_ALL_PASS);
+    }
+
+    let mut all_pass = true;
+    for criterion in &criteria {
+        let result = match criterion {
+            Criterion::Command(cmd) => verify_command(&wt_path, cmd),
+            Criterion::File { path, pattern } => {
+                verify_file(&wt_path, path, pattern.as_deref())
+            }
+            Criterion::Manual(desc) => verify_manual(desc),
+        };
+
+        match result {
+            Ok(true) => println!("  PASS: {criterion}"),
+            Ok(false) => {
+                println!("  FAIL: {criterion}");
+                all_pass = false;
+            }
+            Err(e) => {
+                println!("  FAIL: {criterion} ({e})");
+                all_pass = false;
+            }
+        }
+    }
+
+    if all_pass {
+        println!("task {task_id}: all criteria passed");
+        std::process::exit(EXIT_ALL_PASS);
+    } else {
+        println!("task {task_id}: some criteria failed");
+        std::process::exit(EXIT_SOME_FAIL);
+    }
+}
+
+#[derive(Debug)]
+enum Criterion {
+    Command(String),
+    File {
+        path: String,
+        pattern: Option<String>,
+    },
+    Manual(String),
+}
+
+impl std::fmt::Display for Criterion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Command(cmd) => write!(f, "[command] {cmd}"),
+            Self::File { path, pattern } => {
+                if let Some(p) = pattern {
+                    write!(f, "[file] {path} matches '{p}'")
+                } else {
+                    write!(f, "[file] {path} exists")
+                }
+            }
+            Self::Manual(desc) => write!(f, "[manual] {desc}"),
+        }
+    }
+}
+
+fn parse_criteria(body: &str) -> Vec<Criterion> {
+    let mut criteria = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some(cmd) = line.strip_prefix("verify-command:") {
+            criteria.push(Criterion::Command(cmd.trim().to_string()));
+        } else if let Some(rest) = line.strip_prefix("verify-file:") {
+            let parts: Vec<&str> = rest.trim().splitn(2, ' ').collect();
+            criteria.push(Criterion::File {
+                path: parts[0].to_string(),
+                pattern: parts.get(1).map(|s| s.to_string()),
+            });
+        } else if let Some(desc) = line.strip_prefix("verify-manual:") {
+            criteria.push(Criterion::Manual(desc.trim().to_string()));
+        }
+    }
+    criteria
+}
+
+fn verify_command(worktree: &std::path::Path, cmd: &str) -> Result<bool> {
+    let output = Command::new("sh")
+        .args(["-c", cmd])
+        .current_dir(worktree)
+        .output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("    stderr: {stderr}");
+    }
+    Ok(output.status.success())
+}
+
+fn verify_file(
+    worktree: &std::path::Path,
+    path: &str,
+    pattern: Option<&str>,
+) -> Result<bool> {
+    let file_path = worktree.join(path);
+    if !file_path.exists() {
+        return Ok(false);
+    }
+    if let Some(pattern) = pattern {
+        let content = std::fs::read_to_string(&file_path)?;
+        Ok(content.contains(pattern))
+    } else {
+        Ok(true)
+    }
+}
+
+fn verify_manual(desc: &str) -> Result<bool> {
+    eprint!("manual verification: {desc} [y/n]? ");
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_lowercase().starts_with('y'))
+}

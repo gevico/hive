@@ -1,0 +1,9 @@
+[package]
+name = "hive-git"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+hive-core = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
