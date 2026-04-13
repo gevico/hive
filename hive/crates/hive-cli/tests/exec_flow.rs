@@ -266,3 +266,94 @@ fn exec_blocks_downstream_when_dependency_blocks() {
     assert_eq!(downstream_state.state, TaskState::Blocked);
     assert_eq!(downstream_state.retry_count, 0);
 }
+
+#[test]
+fn merge_rejects_dependency_completed_but_not_merged() {
+    let repo = TestRepo::new("launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n");
+
+    let dep = "dep-task";
+    let child = "child-task";
+
+    // Create dependency task in completed state but NOT merged
+    repo.write_task(dep, "draft-merge", TaskState::Completed, "");
+    let mut dep_state = read_task_state(&repo.paths, dep).unwrap();
+    assert!(!dep_state.merged); // Not yet merged
+
+    // Create child task that depends on dep
+    let child_spec = format!(
+        "---\nid: {child}\ndraft_id: draft-merge\ndepends_on:\n  - {dep}\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\n"
+    );
+    repo.write_task_with(child, "draft-merge", TaskState::Completed, &child_spec, true);
+
+    // Merge child should fail because dep is completed but not merged
+    let output = repo.run_hive(&["merge", "--task", child]);
+    assert!(
+        !output.status.success(),
+        "merge should reject when dependency is completed but not merged"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("not yet merged"),
+        "error should mention 'not yet merged', got: {stderr}"
+    );
+}
+
+#[test]
+fn check_file_verifier_records_detail() {
+    let repo = TestRepo::new("launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n");
+    let task_id = "check-file-task";
+
+    // Create task in review state with file verifier
+    repo.write_task(
+        task_id,
+        "draft-chk",
+        TaskState::Review,
+        "verify-file: nonexistent.txt",
+    );
+
+    let output = repo.run_hive(&["check", "--task", task_id]);
+    // Should exit with code 1 (some fail)
+    assert_eq!(output.status.code(), Some(1));
+
+    // Check that results file was written with "file not found" detail
+    let results_path = repo.paths.task_dir(task_id).join("check-results.md");
+    let results = std::fs::read_to_string(&results_path).unwrap_or_default();
+    assert!(
+        results.contains("file not found"),
+        "check-results.md should contain 'file not found', got: {results}"
+    );
+}
+
+#[test]
+fn approve_works_from_spec_only_without_state_json() {
+    let repo = TestRepo::new("launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n");
+    let task_id = "spec-only-task";
+    let draft_id = "draft-approve";
+
+    // Write spec file directly without creating state.json
+    let spec = format!(
+        "---\nid: {task_id}\ndraft_id: {draft_id}\ncomplexity: S\nschema_version: 1\n---\nGoal\n"
+    );
+    std::fs::write(repo.paths.spec_file(task_id), &spec).unwrap();
+
+    // Also need a plan file
+    let plan_dir = repo.paths.plans_dir().join(draft_id);
+    std::fs::create_dir_all(&plan_dir).unwrap();
+    std::fs::write(
+        repo.paths.plan_file(draft_id, task_id),
+        "# plan\n",
+    )
+    .unwrap();
+
+    // Approve should succeed even without pre-existing state.json
+    let output = repo.run_hive(&["approve", "--draft", draft_id]);
+    assert!(
+        output.status.success(),
+        "approve should work from spec-only draft: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify state was bootstrapped and approved
+    let state = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(state.approval_status, ApprovalStatus::Approved);
+}

@@ -164,20 +164,34 @@ pub fn run() -> Result<()> {
             }
             // Check monotonic timestamps (append-only invariant)
             let mut prev_ts = String::new();
+            let mut entry_count = 0u32;
             for line in content.lines() {
+                if line.starts_with("- [") {
+                    entry_count += 1;
+                }
                 if let Some(ts_start) = line.find('[')
-                    && let Some(ts_end) = line[ts_start + 1..].find(']') {
-                        let ts = &line[ts_start + 1..ts_start + 1 + ts_end];
-                        if !prev_ts.is_empty() && ts < prev_ts.as_str() {
-                            println!(
-                                "[warn] audit file for {} has non-monotonic timestamps (possible tampering)",
-                                s.task_id
-                            );
-                            warnings += 1;
-                            break;
-                        }
-                        prev_ts = ts.to_string();
+                    && let Some(ts_end) = line[ts_start + 1..].find(']')
+                {
+                    let ts = &line[ts_start + 1..ts_start + 1 + ts_end];
+                    if !prev_ts.is_empty() && ts < prev_ts.as_str() {
+                        println!(
+                            "[warn] audit file for {} has non-monotonic timestamps (possible tampering)",
+                            s.task_id
+                        );
+                        warnings += 1;
+                        break;
                     }
+                    prev_ts = ts.to_string();
+                }
+            }
+
+            // Cross-check: task with state transitions should have audit entries
+            if s.state != hive_core::TaskState::Pending && entry_count == 0 {
+                println!(
+                    "[warn] task {} is in state '{}' but audit has no entries (possible tampering or missing audit wiring)",
+                    s.task_id, s.state
+                );
+                warnings += 1;
             }
         }
     }

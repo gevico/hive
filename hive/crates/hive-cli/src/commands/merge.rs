@@ -77,17 +77,7 @@ fn merge_task(
         bail!("merge conflict in task {task_id}, task blocked for manual resolution");
     }
 
-    // Log audit
-    if let Ok(cfg) = config::load_config(&paths.hive_dir()) {
-        let _ = hive_audit::log_merge(
-            &paths.audit_file(task_id),
-            cfg.audit_level,
-            task_id,
-            &format!("merged via {mode}"),
-        );
-    }
-
-    match mode {
+    let actually_merged = match mode {
         "direct" => {
             let _ = std::process::Command::new("git")
                 .args(["checkout", &default])
@@ -95,6 +85,7 @@ fn merge_task(
                 .output()?;
             branch::merge_branch(repo_root, &task_branch)?;
             println!("task {task_id}: merged directly to {default}");
+            true // Confirmed on main branch
         }
         _ => {
             let hive_config = config::load_config(&paths.hive_dir())?;
@@ -119,15 +110,28 @@ fn merge_task(
             } else {
                 println!("task {task_id}: branch {task_branch} ready for review");
             }
+            false // PR/review — not yet on main
+        }
+    };
+
+    // Only set merged=true when actually integrated into main branch
+    if actually_merged {
+        let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
+        let mut state = storage::read_task_state(paths, task_id)?;
+        state.merged = true;
+        state.touch();
+        storage::write_task_state(paths, &state)?;
+
+        // Log audit AFTER confirmed merge success
+        if let Ok(cfg) = config::load_config(&paths.hive_dir()) {
+            let _ = hive_audit::log_merge(
+                &paths.audit_file(task_id),
+                cfg.audit_level,
+                task_id,
+                &format!("merged via {mode} to {default}"),
+            );
         }
     }
-
-    // Mark task as merged in state.json
-    let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
-    let mut state = storage::read_task_state(paths, task_id)?;
-    state.merged = true;
-    state.touch();
-    storage::write_task_state(paths, &state)?;
 
     Ok(())
 }
