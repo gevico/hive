@@ -560,10 +560,11 @@ fn merge_all_non_direct_downstream_skipped() {
 
     // Upstream should be "pending review / not yet on main" (not actually merged)
     // Downstream should be skipped because upstream is not in merged set
+    // Must see downstream-specific skip message
     assert!(
-        combined.contains("not yet merged") || combined.contains("dependencies not yet merged")
-            || combined.contains("pending review"),
-        "merge --all non-direct should skip downstream when upstream is only pending review, got: {combined}"
+        combined.contains(&format!("skipping {downstream}"))
+            || combined.contains(&format!("dependencies not yet merged: {upstream}")),
+        "merge --all must show downstream-specific skip with upstream name, got: {combined}"
     );
 
     // Verify upstream is NOT marked as merged in state.json
@@ -571,5 +572,17 @@ fn merge_all_non_direct_downstream_skipped() {
     assert!(
         !up_state.merged,
         "upstream should not be marked merged in non-direct mode"
+    );
+
+    // Verify downstream state has NOT changed (no merge attempt side effects)
+    let down_state = read_task_state(&repo.paths, downstream).unwrap();
+    assert!(
+        !down_state.merged,
+        "downstream should not be marked merged when upstream isn't"
+    );
+    assert_eq!(
+        down_state.state,
+        TaskState::Completed,
+        "downstream state should remain completed (not blocked or failed)"
     );
 }

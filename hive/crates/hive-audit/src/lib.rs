@@ -38,8 +38,11 @@ pub fn append_entry(
     let mut new_content = existing;
     new_content.push_str(&entry);
 
-    // Compute HMAC using .hive/audit.key if available, fall back to plain SHA-256
-    let key = load_audit_key(audit_path);
+    // Compute HMAC using ~/.config/hive/audit.key
+    let key = load_audit_key().unwrap_or_else(|| {
+        eprintln!("warning: audit key not found, integrity footer will use empty key");
+        Vec::new()
+    });
     let hash = compute_hmac(&new_content, &key);
     new_content.push_str(&format!("# integrity: {hash}\n"));
 
@@ -69,20 +72,41 @@ fn compute_hmac(content: &str, key: &[u8]) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// Load the audit key from .hive/audit.key.
-/// The key path is derived from the audit file path: .hive/tasks/<id>/audit.md -> .hive/audit.key
-fn load_audit_key(audit_path: &Path) -> Vec<u8> {
-    // audit_path is typically .hive/tasks/<id>/audit.md
-    // key is at .hive/audit.key (3 levels up from audit.md)
-    if let Some(tasks_dir) = audit_path.parent().and_then(|p| p.parent())
-        && let Some(hive_dir) = tasks_dir.parent() {
-            let key_path = hive_dir.join("audit.key");
-            if let Ok(key) = std::fs::read(&key_path) {
-                return key;
-            }
+/// Load the audit key from ~/.config/hive/audit.key (outside the repo tree).
+/// Workers in worktrees cannot access this key, making HMAC CLI-exclusive.
+/// Returns None if key is not found — callers must handle this as anomaly.
+fn load_audit_key() -> Option<Vec<u8>> {
+    // Primary: user config dir (~/.config/hive/audit.key)
+    if let Some(config_dir) = dirs_next::config_dir() {
+        let key_path = config_dir.join("hive").join("audit.key");
+        if let Ok(key) = std::fs::read(&key_path) {
+            return Some(key);
         }
-    // Fallback: use a deterministic but weak key (for tests without full init)
-    b"hive-default-audit-key".to_vec()
+    }
+    // No fallback — missing key is an explicit anomaly condition
+    None
+}
+
+/// Get the path where the audit key should be stored.
+pub fn audit_key_path() -> Option<std::path::PathBuf> {
+    dirs_next::config_dir().map(|d| d.join("hive").join("audit.key"))
+}
+
+/// Ensure the audit key exists (generate if missing). Used by init and tests.
+pub fn ensure_audit_key() -> std::io::Result<()> {
+    if let Some(path) = audit_key_path()
+        && !path.exists() {
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            use std::io::Read;
+            let mut key = [0u8; 32];
+            if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+                let _ = f.read_exact(&mut key);
+            }
+            std::fs::write(&path, key)?;
+        }
+    Ok(())
 }
 
 fn should_log(entry_level: AuditLevel, config_level: AuditLevel) -> bool {
@@ -189,7 +213,12 @@ pub fn verify_integrity(audit_path: &Path) -> HiveResult<bool> {
 
     let stored_hash = last.strip_prefix("# integrity: ").unwrap_or("").trim();
     let body = strip_integrity_line(&content);
-    let key = load_audit_key(audit_path);
+
+    // Key must exist to verify — missing key = can't trust any audit
+    let key = match load_audit_key() {
+        Some(k) => k,
+        None => return Ok(false), // No key = anomaly (can't verify)
+    };
     let expected_hash = compute_hmac(&body, &key);
 
     Ok(stored_hash == expected_hash)
@@ -253,6 +282,7 @@ mod tests {
 
     #[test]
     fn integrity_passes_for_untampered() {
+        ensure_audit_key().unwrap();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
@@ -261,6 +291,7 @@ mod tests {
 
     #[test]
     fn integrity_fails_for_tampered_content() {
+        ensure_audit_key().unwrap();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();

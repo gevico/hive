@@ -33,23 +33,14 @@ pub fn run() -> Result<()> {
         println!("created {}", paths.config_local_yml().display());
     }
 
-    // Generate audit key for HMAC integrity verification
-    let audit_key_path = paths.hive_dir().join("audit.key");
-    if !audit_key_path.exists() {
-        use std::io::Read;
-        let mut key = [0u8; 32];
-        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-            let _ = f.read_exact(&mut key);
-        } else {
-            // Fallback: use timestamp-based entropy
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default();
-            key[..8].copy_from_slice(&now.as_nanos().to_le_bytes()[..8]);
+    // Generate audit key at ~/.config/hive/audit.key (outside repo tree)
+    // Workers in worktrees cannot access this key, making HMAC CLI-exclusive
+    hive_audit::ensure_audit_key()
+        .with_context(|| "failed to generate audit key")?;
+    if let Some(kp) = hive_audit::audit_key_path()
+        && kp.exists() {
+            println!("audit key at {}", kp.display());
         }
-        std::fs::write(&audit_key_path, key)?;
-        println!("created {}", audit_key_path.display());
-    }
 
     // Update .gitignore
     update_gitignore(&cwd)?;
@@ -109,7 +100,6 @@ fn git_config_value(key: &str) -> Option<String> {
 const GITIGNORE_ENTRIES: &[&str] = &[
     ".hive/config.local.yml",
     ".hive/state.md",
-    ".hive/audit.key",
     ".hive/specs/",
     ".hive/plans/",
     ".hive/tasks/",
