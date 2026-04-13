@@ -53,14 +53,7 @@ fn create_github_pr(
     check_tool_available("gh")?;
 
     let mut args = vec![
-        "pr",
-        "create",
-        "--head",
-        branch,
-        "--title",
-        title,
-        "--body",
-        body,
+        "pr", "create", "--head", branch, "--title", title, "--body", body,
     ];
 
     for label in labels {
@@ -85,9 +78,7 @@ fn create_github_pr(
 
 /// Check if a CLI tool is available in PATH.
 pub fn check_tool_available(tool: &str) -> HiveResult<()> {
-    let result = Command::new("which")
-        .arg(tool)
-        .output();
+    let result = Command::new("which").arg(tool).output();
 
     match result {
         Ok(o) if o.status.success() => Ok(()),

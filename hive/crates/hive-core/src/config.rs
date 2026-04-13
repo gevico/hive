@@ -139,15 +139,10 @@ pub fn load_config(hive_dir: &Path) -> HiveResult<HiveConfig> {
 }
 
 fn load_yaml_file(path: &Path) -> HiveResult<Value> {
-    let content = std::fs::read_to_string(path).map_err(|e| {
-        HiveError::Config(format!("failed to read {}: {e}", path.display()))
-    })?;
-    let value: Value = serde_yaml::from_str(&content).map_err(|e| {
-        HiveError::Config(format!(
-            "malformed YAML in {}: {e}",
-            path.display()
-        ))
-    })?;
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| HiveError::Config(format!("failed to read {}: {e}", path.display())))?;
+    let value: Value = serde_yaml::from_str(&content)
+        .map_err(|e| HiveError::Config(format!("malformed YAML in {}: {e}", path.display())))?;
     Ok(value)
 }
 
@@ -194,9 +189,7 @@ fn collect_annotated(
             };
 
             let gval = gmap.get(key);
-            let lval = local
-                .and_then(|l| l.as_mapping())
-                .and_then(|m| m.get(key));
+            let lval = local.and_then(|l| l.as_mapping()).and_then(|m| m.get(key));
 
             match (gval, lval) {
                 (Some(g), Some(l)) => {
@@ -279,7 +272,10 @@ mod tests {
         let merged = deep_merge(&base, &overlay);
         let m = merged.as_mapping().unwrap();
         assert_eq!(
-            m.get(Value::String("key".into())).unwrap().as_str().unwrap(),
+            m.get(Value::String("key".into()))
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "overlay_val"
         );
     }
@@ -360,12 +356,16 @@ skills:
         let mut entries = Vec::new();
         collect_annotated("", &base, Some(&overlay), &mut entries);
         // a should be global, b should be local
-        assert!(entries
-            .iter()
-            .any(|(k, _, s)| k == "a" && *s == ConfigSource::Global));
-        assert!(entries
-            .iter()
-            .any(|(k, _, s)| k == "b" && *s == ConfigSource::Local));
+        assert!(
+            entries
+                .iter()
+                .any(|(k, _, s)| k == "a" && *s == ConfigSource::Global)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(k, _, s)| k == "b" && *s == ConfigSource::Local)
+        );
     }
 
     fn collect_annotated_wrapper() -> Vec<(String, String, ConfigSource)> {
@@ -379,8 +379,10 @@ skills:
     #[test]
     fn nested_annotation_shows_local_override() {
         let entries = collect_annotated_wrapper();
-        assert!(entries
-            .iter()
-            .any(|(k, v, s)| k == "user.name" && v == "bob" && *s == ConfigSource::Local));
+        assert!(
+            entries
+                .iter()
+                .any(|(k, v, s)| k == "user.name" && v == "bob" && *s == ConfigSource::Local)
+        );
     }
 }

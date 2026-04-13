@@ -96,10 +96,22 @@ impl TaskState {
             // blocked → pending (manual unblock)
             (Self::Blocked, TransitionAction::Unblock) => Ok(Self::Pending),
 
-            _ => Err(HiveError::InvalidTransition {
-                from: self.to_string(),
-                to: format!("{action:?}"),
-            }),
+            _ => {
+                let target = match action {
+                    TransitionAction::Assign => "assigned",
+                    TransitionAction::Start => "in_progress",
+                    TransitionAction::SubmitForReview => "review",
+                    TransitionAction::Fail => "failed",
+                    TransitionAction::Complete => "completed",
+                    TransitionAction::Block => "blocked",
+                    TransitionAction::Retry => "pending",
+                    TransitionAction::Unblock => "pending",
+                };
+                Err(HiveError::InvalidTransition {
+                    from: self.to_string(),
+                    to: target.to_string(),
+                })
+            }
         }
     }
 

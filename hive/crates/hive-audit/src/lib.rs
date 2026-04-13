@@ -1,8 +1,8 @@
 use std::path::Path;
 
 use chrono::Utc;
-use hive_core::config::AuditLevel;
 use hive_core::HiveResult;
+use hive_core::config::AuditLevel;
 
 /// Append an audit entry to a task's audit.md file.
 pub fn append_entry(
@@ -133,7 +133,14 @@ mod tests {
         let path = tmp.path().join("audit.md");
 
         log_state_change(&path, AuditLevel::Standard, "t-01", "pending", "assigned").unwrap();
-        log_state_change(&path, AuditLevel::Standard, "t-01", "assigned", "in_progress").unwrap();
+        log_state_change(
+            &path,
+            AuditLevel::Standard,
+            "t-01",
+            "assigned",
+            "in_progress",
+        )
+        .unwrap();
 
         let content = read_audit(&path).unwrap();
         assert!(content.contains("pending -> assigned"));

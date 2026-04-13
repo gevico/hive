@@ -86,18 +86,18 @@ pub fn run() -> Result<()> {
                 let lock_path = entry.path().join("lock");
                 if lock_path.exists()
                     && let Ok(content) = std::fs::read_to_string(&lock_path)
-                        && let Some(pid_str) = content.lines().next()
-                            && let Ok(pid) = pid_str.trim().parse::<u32>() {
-                                let alive =
-                                    std::path::Path::new(&format!("/proc/{pid}")).exists();
-                                if !alive {
-                                    println!(
-                                        "[warn] stale lock: {} (pid {pid} dead)",
-                                        lock_path.display()
-                                    );
-                                    warnings += 1;
-                                }
-                            }
+                    && let Some(pid_str) = content.lines().next()
+                    && let Ok(pid) = pid_str.trim().parse::<u32>()
+                {
+                    let alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+                    if !alive {
+                        println!(
+                            "[warn] stale lock: {} (pid {pid} dead)",
+                            lock_path.display()
+                        );
+                        warnings += 1;
+                    }
+                }
             }
         }
     }
@@ -118,10 +118,11 @@ pub fn run() -> Result<()> {
         for entry in std::fs::read_dir(&worktrees_dir)? {
             let entry = entry?;
             if let Some(name) = entry.file_name().to_str()
-                && !states.iter().any(|s| s.task_id == name) {
-                    println!("[warn] orphaned worktree: {name}");
-                    warnings += 1;
-                }
+                && !states.iter().any(|s| s.task_id == name)
+            {
+                println!("[warn] orphaned worktree: {name}");
+                warnings += 1;
+            }
         }
     }
 

@@ -125,7 +125,9 @@ impl HivePaths {
     }
 
     pub fn plan_file(&self, draft_id: &str, task_id: &str) -> PathBuf {
-        self.plans_dir().join(draft_id).join(format!("{task_id}.md"))
+        self.plans_dir()
+            .join(draft_id)
+            .join(format!("{task_id}.md"))
     }
 
     pub fn rfc_file(&self, draft_id: &str) -> PathBuf {
@@ -153,8 +155,8 @@ impl HivePaths {
 /// Read a task's state.json.
 pub fn read_task_state(paths: &HivePaths, task_id: &str) -> HiveResult<TaskStateFile> {
     let path = paths.state_json(task_id);
-    let content = std::fs::read_to_string(&path)
-        .map_err(|_| HiveError::TaskNotFound(task_id.to_string()))?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|_| HiveError::TaskNotFound(task_id.to_string()))?;
     let state: TaskStateFile = serde_json::from_str(&content)?;
     Ok(state)
 }
@@ -181,9 +183,10 @@ pub fn list_task_ids(paths: &HivePaths) -> HiveResult<Vec<String>> {
     for entry in std::fs::read_dir(&tasks_dir)? {
         let entry = entry?;
         if entry.file_type()?.is_dir()
-            && let Some(name) = entry.file_name().to_str() {
-                ids.push(name.to_string());
-            }
+            && let Some(name) = entry.file_name().to_str()
+        {
+            ids.push(name.to_string());
+        }
     }
     ids.sort();
     Ok(ids)

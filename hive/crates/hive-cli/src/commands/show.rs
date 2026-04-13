@@ -28,12 +28,13 @@ pub fn run(task_id: String) -> Result<()> {
     let spec_path = paths.spec_file(&task_id);
     if spec_path.exists()
         && let Ok(content) = std::fs::read_to_string(&spec_path)
-            && let Ok(spec) = hive_core::task::parse_spec(&content) {
-                println!("Complexity: {}", spec.complexity);
-                if !spec.depends_on.is_empty() {
-                    println!("Depends on: {}", spec.depends_on.join(", "));
-                }
-            }
+        && let Ok(spec) = hive_core::task::parse_spec(&content)
+    {
+        println!("Complexity: {}", spec.complexity);
+        if !spec.depends_on.is_empty() {
+            println!("Depends on: {}", spec.depends_on.join(", "));
+        }
+    }
 
     Ok(())
 }

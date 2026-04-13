@@ -14,10 +14,7 @@ pub fn run(draft_id: String) -> Result<()> {
 
     // Find all specs for this draft
     let states = storage::load_all_states(&paths)?;
-    let draft_tasks: Vec<_> = states
-        .iter()
-        .filter(|s| s.draft_id == draft_id)
-        .collect();
+    let draft_tasks: Vec<_> = states.iter().filter(|s| s.draft_id == draft_id).collect();
 
     if draft_tasks.is_empty() {
         bail!("no specs found for draft {draft_id}");
@@ -25,13 +22,9 @@ pub fn run(draft_id: String) -> Result<()> {
 
     // Check that no tasks are already in rfc or approved state
     for s in &draft_tasks {
-        if s.approval_status == ApprovalStatus::Rfc
-            || s.approval_status == ApprovalStatus::Approved
+        if s.approval_status == ApprovalStatus::Rfc || s.approval_status == ApprovalStatus::Approved
         {
-            bail!(
-                "draft {draft_id} already in '{}' state",
-                s.approval_status
-            );
+            bail!("draft {draft_id} already in '{}' state", s.approval_status);
         }
     }
 
@@ -56,17 +49,18 @@ pub fn run(draft_id: String) -> Result<()> {
     for s in &draft_tasks {
         let spec_path = paths.spec_file(&s.task_id);
         if let Ok(content) = std::fs::read_to_string(&spec_path)
-            && let Ok(spec) = hive_core::task::parse_spec(&content) {
-                if spec.depends_on.is_empty() {
-                    rfc_content.push_str(&format!("- `{}` (no dependencies)\n", s.task_id));
-                } else {
-                    rfc_content.push_str(&format!(
-                        "- `{}` -> {}\n",
-                        s.task_id,
-                        spec.depends_on.join(", ")
-                    ));
-                }
+            && let Ok(spec) = hive_core::task::parse_spec(&content)
+        {
+            if spec.depends_on.is_empty() {
+                rfc_content.push_str(&format!("- `{}` (no dependencies)\n", s.task_id));
+            } else {
+                rfc_content.push_str(&format!(
+                    "- `{}` -> {}\n",
+                    s.task_id,
+                    spec.depends_on.join(", ")
+                ));
             }
+        }
     }
 
     // Complexity summary
@@ -74,14 +68,15 @@ pub fn run(draft_id: String) -> Result<()> {
     for s in &draft_tasks {
         let spec_path = paths.spec_file(&s.task_id);
         if let Ok(content) = std::fs::read_to_string(&spec_path)
-            && let Ok(spec) = hive_core::task::parse_spec(&content) {
-                rfc_content.push_str(&format!(
-                    "- `{}`: {} (RLCR max rounds: {})\n",
-                    s.task_id,
-                    spec.complexity,
-                    spec.complexity.rlcr_max_rounds()
-                ));
-            }
+            && let Ok(spec) = hive_core::task::parse_spec(&content)
+        {
+            rfc_content.push_str(&format!(
+                "- `{}`: {} (RLCR max rounds: {})\n",
+                s.task_id,
+                spec.complexity,
+                spec.complexity.rlcr_max_rounds()
+            ));
+        }
     }
 
     // Embed full spec and plan content

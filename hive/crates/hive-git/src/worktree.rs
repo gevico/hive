@@ -9,11 +9,7 @@ pub fn branch_name(task_id: &str) -> String {
 }
 
 /// Create a git worktree for a task.
-pub fn create(
-    repo_root: &Path,
-    worktree_path: &Path,
-    task_id: &str,
-) -> HiveResult<String> {
+pub fn create(repo_root: &Path, worktree_path: &Path, task_id: &str) -> HiveResult<String> {
     if worktree_path.exists() {
         return Err(HiveError::WorktreeExists(task_id.to_string()));
     }
@@ -40,12 +36,7 @@ pub fn create(
 
     // Create worktree
     let output = Command::new("git")
-        .args([
-            "worktree",
-            "add",
-            &worktree_path.to_string_lossy(),
-            &branch,
-        ])
+        .args(["worktree", "add", &worktree_path.to_string_lossy(), &branch])
         .current_dir(repo_root)
         .output()
         .map_err(|e| HiveError::Git(format!("failed to create worktree: {e}")))?;
@@ -112,7 +103,9 @@ pub fn list(repo_root: &Path) -> HiveResult<Vec<WorktreeInfo>> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(HiveError::Git(format!("git worktree list failed: {stderr}")));
+        return Err(HiveError::Git(format!(
+            "git worktree list failed: {stderr}"
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

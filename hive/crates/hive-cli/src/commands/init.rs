@@ -239,11 +239,7 @@ fn generate_generic_adapter(paths: &HivePaths) -> Result<()> {
     Ok(())
 }
 
-fn install_humanize_plugin(
-    paths: &HivePaths,
-    has_claude: bool,
-    has_codex: bool,
-) -> Result<()> {
+fn install_humanize_plugin(paths: &HivePaths, has_claude: bool, has_codex: bool) -> Result<()> {
     if has_claude || has_codex {
         // Adapter generation already handles plugin references
         return Ok(());

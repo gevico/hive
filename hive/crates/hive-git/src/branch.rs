@@ -35,12 +35,13 @@ pub fn default_branch(repo_root: &Path) -> HiveResult<String> {
         .output();
 
     if let Ok(o) = output
-        && o.status.success() {
-            let refname = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if let Some(branch) = refname.strip_prefix("refs/remotes/origin/") {
-                return Ok(branch.to_string());
-            }
+        && o.status.success()
+    {
+        let refname = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if let Some(branch) = refname.strip_prefix("refs/remotes/origin/") {
+            return Ok(branch.to_string());
         }
+    }
 
     // Fall back to local main/master
     for name in ["main", "master"] {
@@ -49,9 +50,10 @@ pub fn default_branch(repo_root: &Path) -> HiveResult<String> {
             .current_dir(repo_root)
             .output();
         if let Ok(o) = output
-            && o.status.success() {
-                return Ok(name.to_string());
-            }
+            && o.status.success()
+        {
+            return Ok(name.to_string());
+        }
     }
 
     Err(HiveError::Git("cannot determine default branch".into()))

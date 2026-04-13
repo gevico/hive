@@ -83,11 +83,7 @@ fn merge_task(
     Ok(())
 }
 
-fn merge_all(
-    repo_root: &std::path::Path,
-    paths: &HivePaths,
-    mode: &str,
-) -> Result<()> {
+fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Result<()> {
     let states = storage::load_all_states(paths)?;
     let completed: Vec<_> = states
         .iter()

@@ -39,11 +39,7 @@ pub fn run() -> Result<()> {
         if deps.is_empty() {
             println!("{state_marker} {}", s.task_id);
         } else {
-            println!(
-                "{state_marker} {} <- {}",
-                s.task_id,
-                deps.join(", ")
-            );
+            println!("{state_marker} {} <- {}", s.task_id, deps.join(", "));
         }
     }
 

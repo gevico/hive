@@ -11,14 +11,19 @@ pub fn run(task_id: String) -> Result<()> {
         bail!("not a hive project. Run `hive init` first");
     }
 
-    // Acquire per-task lock
-    let _lock = FileLock::try_acquire(&paths.lock_file(&task_id))?;
+    claim_task(&paths, &task_id)?;
 
-    let mut state = storage::read_task_state(&paths, &task_id)?;
+    println!("task {task_id}: claimed (pending -> assigned)");
+    Ok(())
+}
+
+pub(crate) fn claim_task(paths: &HivePaths, task_id: &str) -> Result<()> {
+    let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
+    let mut state = storage::read_task_state(paths, task_id)?;
 
     // Check if all dependencies are completed
-    let all_states = storage::load_all_states(&paths)?;
-    let spec_content = std::fs::read_to_string(paths.spec_file(&task_id)).ok();
+    let all_states = storage::load_all_states(paths)?;
+    let spec_content = std::fs::read_to_string(paths.spec_file(task_id)).ok();
     let depends_on = if let Some(ref content) = spec_content {
         hive_core::task::parse_spec(content)
             .map(|s| s.depends_on)
@@ -33,14 +38,13 @@ pub fn run(task_id: String) -> Result<()> {
             .any(|s| s.task_id == *dep && s.state == hive_core::TaskState::Completed)
     });
 
-    let new_state = state
-        .state
-        .transition(TransitionAction::Assign, state.retry_count, deps_completed)?;
+    let new_state =
+        state
+            .state
+            .transition(TransitionAction::Assign, state.retry_count, deps_completed)?;
 
     state.state = new_state;
     state.touch();
-    storage::write_task_state(&paths, &state)?;
-
-    println!("task {task_id}: claimed (pending -> assigned)");
+    storage::write_task_state(paths, &state)?;
     Ok(())
 }

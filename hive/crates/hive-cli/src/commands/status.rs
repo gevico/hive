@@ -40,9 +40,5 @@ pub fn run() -> Result<()> {
 }
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() > max {
-        &s[..max]
-    } else {
-        s
-    }
+    if s.len() > max { &s[..max] } else { s }
 }

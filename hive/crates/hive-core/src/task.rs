@@ -81,6 +81,33 @@ impl std::fmt::Display for ApprovalStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskResultStatus {
+    Completed,
+    Failed,
+}
+
+impl std::fmt::Display for TaskResultStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Completed => write!(f, "completed"),
+            Self::Failed => write!(f, "failed"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskResultFile {
+    pub id: String,
+    pub status: TaskResultStatus,
+    pub branch: String,
+    pub commit: String,
+    pub base_commit: String,
+    pub schema_version: u32,
+    pub body: String,
+}
+
 const SPEC_KNOWN_FIELDS: &[&str] = &[
     "id",
     "draft_id",
@@ -90,6 +117,15 @@ const SPEC_KNOWN_FIELDS: &[&str] = &[
     "schema_version",
     "skills",
     "exclude_skills",
+];
+
+const RESULT_KNOWN_FIELDS: &[&str] = &[
+    "id",
+    "status",
+    "branch",
+    "commit",
+    "base_commit",
+    "schema_version",
 ];
 
 /// Parse a spec file (.hive/specs/<id>.md).
@@ -112,11 +148,11 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
             return Err(HiveError::InvalidFieldValue {
                 field: "approval_status".into(),
                 reason: format!("expected draft, rfc, or approved, got '{other}'"),
-            })
+            });
         }
     };
 
-    let depends_on = fm.get_string_list("depends_on").unwrap_or_default();
+    let depends_on = fm.optional_string_list("depends_on")?.unwrap_or_default();
 
     Ok(Spec {
         id,
@@ -130,13 +166,39 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
     })
 }
 
+/// Parse a task result file (.hive/tasks/<id>/result.md).
+pub fn parse_result(content: &str) -> HiveResult<TaskResultFile> {
+    let fm = frontmatter::parse(content)?;
+    let schema_version = frontmatter::validate_schema_version(&fm)?;
+    frontmatter::warn_unknown_fields(&fm, RESULT_KNOWN_FIELDS);
+
+    let status = match fm.require_str("status")? {
+        "completed" => TaskResultStatus::Completed,
+        "failed" => TaskResultStatus::Failed,
+        other => {
+            return Err(HiveError::InvalidFieldValue {
+                field: "status".into(),
+                reason: format!("expected completed or failed, got '{other}'"),
+            });
+        }
+    };
+
+    Ok(TaskResultFile {
+        id: fm.require_str("id")?.to_string(),
+        status,
+        branch: fm.require_str("branch")?.to_string(),
+        commit: fm.require_str("commit")?.to_string(),
+        base_commit: fm.require_str("base_commit")?.to_string(),
+        schema_version,
+        body: fm.body,
+    })
+}
+
 /// Compute spec content hash (sha256[:8]) for state.json metadata.
 pub fn spec_content_hash(content: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())[..8].to_string()
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(content.as_bytes());
+    format!("{:x}", hash)[..8].to_string()
 }
 
 #[cfg(test)]
@@ -234,5 +296,49 @@ Implement feature X
         let h1 = spec_content_hash("content A");
         let h2 = spec_content_hash("content B");
         assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn depends_on_string_rejected() {
+        let content = "---\nid: t\ndraft_id: d\ncomplexity: S\ndepends_on: not-a-list\n---\n";
+        assert!(matches!(
+            parse_spec(content),
+            Err(HiveError::InvalidFieldValue { field, .. }) if field == "depends_on"
+        ));
+    }
+
+    #[test]
+    fn depends_on_null_accepted() {
+        let content = "---\nid: t\ndraft_id: d\ncomplexity: S\ndepends_on:\n---\n";
+        let spec = parse_spec(content).unwrap();
+        assert!(spec.depends_on.is_empty());
+    }
+
+    #[test]
+    fn parse_valid_result() {
+        let content = r#"---
+id: user-01ABCDEF
+status: completed
+branch: hive/user-01ABCDEF
+commit: abcdef1
+base_commit: "1234567"
+schema_version: 1
+---
+## Summary
+Done
+"#;
+        let result = parse_result(content).unwrap();
+        assert_eq!(result.id, "user-01ABCDEF");
+        assert_eq!(result.status, TaskResultStatus::Completed);
+        assert_eq!(result.branch, "hive/user-01ABCDEF");
+    }
+
+    #[test]
+    fn parse_result_requires_base_commit() {
+        let content = "---\nid: t\nstatus: completed\nbranch: hive/t\ncommit: abc\n---\n";
+        assert!(matches!(
+            parse_result(content),
+            Err(HiveError::MissingField(field)) if field == "base_commit"
+        ));
     }
 }

@@ -11,10 +11,7 @@ pub fn run(draft_id: String) -> Result<()> {
     }
 
     let states = storage::load_all_states(&paths)?;
-    let draft_tasks: Vec<_> = states
-        .iter()
-        .filter(|s| s.draft_id == draft_id)
-        .collect();
+    let draft_tasks: Vec<_> = states.iter().filter(|s| s.draft_id == draft_id).collect();
 
     if draft_tasks.is_empty() {
         bail!("draft not found: {draft_id}");

@@ -25,9 +25,7 @@ pub fn parse(content: &str) -> HiveResult<Frontmatter> {
     let after_first = &trimmed[FRONTMATTER_DELIMITER.len()..];
     let end_pos = after_first
         .find(&format!("\n{FRONTMATTER_DELIMITER}"))
-        .ok_or_else(|| {
-            HiveError::FrontmatterParse("closing '---' not found".into())
-        })?;
+        .ok_or_else(|| HiveError::FrontmatterParse("closing '---' not found".into()))?;
 
     let yaml_str = &after_first[..end_pos];
 
@@ -44,7 +42,7 @@ pub fn parse(content: &str) -> HiveResult<Frontmatter> {
         _ => {
             return Err(HiveError::FrontmatterParse(
                 "frontmatter must be a YAML mapping".into(),
-            ))
+            ));
         }
     };
 
@@ -79,6 +77,27 @@ impl Frontmatter {
             })
     }
 
+    pub fn optional_string_list(&self, key: &str) -> HiveResult<Option<Vec<String>>> {
+        match self.fields.get(Value::String(key.to_string())) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Sequence(seq)) => {
+                let mut values = Vec::with_capacity(seq.len());
+                for value in seq {
+                    let item = value.as_str().ok_or_else(|| HiveError::InvalidFieldValue {
+                        field: key.to_string(),
+                        reason: "expected list of strings".into(),
+                    })?;
+                    values.push(item.to_string());
+                }
+                Ok(Some(values))
+            }
+            Some(_) => Err(HiveError::InvalidFieldValue {
+                field: key.to_string(),
+                reason: "expected list of strings".into(),
+            }),
+        }
+    }
+
     pub fn require_str(&self, key: &str) -> HiveResult<&str> {
         self.get_str(key)
             .ok_or_else(|| HiveError::MissingField(key.to_string()))
@@ -106,12 +125,13 @@ pub fn validate_schema_version(fm: &Frontmatter) -> HiveResult<u32> {
 /// Validate a description field length constraint.
 pub fn validate_description(fm: &Frontmatter) -> HiveResult<()> {
     if let Some(desc) = fm.get_str("description")
-        && desc.len() > MAX_DESCRIPTION_SIZE {
-            return Err(HiveError::ConstraintViolation(format!(
-                "description length {} exceeds limit {MAX_DESCRIPTION_SIZE}",
-                desc.len()
-            )));
-        }
+        && desc.len() > MAX_DESCRIPTION_SIZE
+    {
+        return Err(HiveError::ConstraintViolation(format!(
+            "description length {} exceeds limit {MAX_DESCRIPTION_SIZE}",
+            desc.len()
+        )));
+    }
     Ok(())
 }
 
@@ -119,9 +139,10 @@ pub fn validate_description(fm: &Frontmatter) -> HiveResult<()> {
 pub fn warn_unknown_fields(fm: &Frontmatter, known: &[&str]) {
     for key in fm.fields.keys() {
         if let Some(k) = key.as_str()
-            && !known.contains(&k) {
-                eprintln!("warning: unknown field '{k}' in frontmatter (ignored)");
-            }
+            && !known.contains(&k)
+        {
+            eprintln!("warning: unknown field '{k}' in frontmatter (ignored)");
+        }
     }
 }
 
@@ -216,6 +237,23 @@ mod tests {
         let doc = "---\ndepends_on: not-a-list\n---\n";
         let fm = parse(doc).unwrap();
         assert!(fm.get_string_list("depends_on").is_none());
+    }
+
+    #[test]
+    fn optional_string_list_accepts_missing_field() {
+        let doc = "---\nid: test\n---\n";
+        let fm = parse(doc).unwrap();
+        assert_eq!(fm.optional_string_list("depends_on").unwrap(), None);
+    }
+
+    #[test]
+    fn optional_string_list_rejects_non_string_items() {
+        let doc = "---\ndepends_on:\n  - task-1\n  - 42\n---\n";
+        let fm = parse(doc).unwrap();
+        assert!(matches!(
+            fm.optional_string_list("depends_on"),
+            Err(HiveError::InvalidFieldValue { .. })
+        ));
     }
 
     #[test]

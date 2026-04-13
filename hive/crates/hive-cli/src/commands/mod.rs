@@ -1,24 +1,25 @@
-mod init;
-mod config;
-mod status;
-mod exec;
-mod merge;
-mod rfc;
 mod approve;
+mod audit;
 mod check;
-mod report;
 mod claim;
+mod cleanup;
+mod config;
+mod doctor;
+mod exec;
+mod graph;
+mod init;
 mod isolate;
 mod launch;
-mod cleanup;
-mod doctor;
-mod graph;
-mod show;
 mod list_tasks;
-mod audit;
+mod merge;
+mod report;
+mod rfc;
+mod runtime;
+mod show;
+mod status;
 
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "hive", version, about = "Multi-agent orchestration harness")]

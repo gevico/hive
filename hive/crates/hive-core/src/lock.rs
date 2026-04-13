@@ -82,21 +82,23 @@ fn check_and_remove_stale(path: &Path) {
     }
     if let Ok(content) = std::fs::read_to_string(path)
         && let Some(pid_str) = content.lines().next()
-            && let Ok(pid) = pid_str.trim().parse::<u32>() {
-                let pid_alive = Path::new(&format!("/proc/{pid}")).exists();
-                if !pid_alive
-                    && let Ok(metadata) = std::fs::metadata(path)
-                        && let Ok(modified) = metadata.modified()
-                            && let Ok(age) = SystemTime::now().duration_since(modified)
-                                && age > STALE_LOCK_AGE {
-                                    eprintln!(
-                                        "warning: removing stale lock {} (pid {pid} dead, age {:.0}s)",
-                                        path.display(),
-                                        age.as_secs_f64()
-                                    );
-                                    let _ = std::fs::remove_file(path);
-                                }
-            }
+        && let Ok(pid) = pid_str.trim().parse::<u32>()
+    {
+        let pid_alive = Path::new(&format!("/proc/{pid}")).exists();
+        if !pid_alive
+            && let Ok(metadata) = std::fs::metadata(path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(age) = SystemTime::now().duration_since(modified)
+            && age > STALE_LOCK_AGE
+        {
+            eprintln!(
+                "warning: removing stale lock {} (pid {pid} dead, age {:.0}s)",
+                path.display(),
+                age.as_secs_f64()
+            );
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 /// Orchestrator-level lock to prevent double-exec.
@@ -148,10 +150,7 @@ mod tests {
         let lock_path = tmp.path().join("orchestrator.lock");
         let _lock = OrchestratorLock::acquire(&lock_path).unwrap();
         // Second lock attempt via a different FD path
-        let file = OpenOptions::new()
-            .write(true)
-            .open(&lock_path)
-            .unwrap();
+        let file = OpenOptions::new().write(true).open(&lock_path).unwrap();
         use std::os::unix::io::AsRawFd;
         let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
         // Should fail because first lock is held

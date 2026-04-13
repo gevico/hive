@@ -79,21 +79,15 @@ fn try_load_skill(base: &Path, name: &str) -> Option<SkillInfo> {
 
     // Validate constraints
     if description.len() > 500 {
-        eprintln!(
-            "warning: skill '{skill_name}' description exceeds 500 chars, skipping"
-        );
+        eprintln!("warning: skill '{skill_name}' description exceeds 500 chars, skipping");
         return None;
     }
 
     if content.find("---").map_or(0, |start| {
-        content[start + 3..]
-            .find("---")
-            .map_or(0, |end| end)
+        content[start + 3..].find("---").map_or(0, |end| end)
     }) > 1024
     {
-        eprintln!(
-            "warning: skill '{skill_name}' frontmatter exceeds 1024 chars, skipping"
-        );
+        eprintln!("warning: skill '{skill_name}' frontmatter exceeds 1024 chars, skipping");
         return None;
     }
 
@@ -108,9 +102,7 @@ fn try_load_skill(base: &Path, name: &str) -> Option<SkillInfo> {
 fn is_valid_skill_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= MAX_SKILL_NAME_LEN
-        && name
-            .chars()
-            .all(|c| c.is_alphanumeric() || c == '-')
+        && name.chars().all(|c| c.is_alphanumeric() || c == '-')
 }
 
 /// Build the agent context string from loaded skills.
@@ -145,14 +137,8 @@ mod tests {
         let skills_dir = tmp.path().join("skills");
         create_skill(&skills_dir, "my-skill", "A test skill");
 
-        let loaded = discover_skills(
-            &skills_dir,
-            None,
-            &["my-skill".to_string()],
-            &[],
-            &[],
-        )
-        .unwrap();
+        let loaded =
+            discover_skills(&skills_dir, None, &["my-skill".to_string()], &[], &[]).unwrap();
 
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].name, "my-skill");
@@ -202,13 +188,7 @@ mod tests {
     #[test]
     fn invalid_skill_name_rejected() {
         let tmp = TempDir::new().unwrap();
-        let result = discover_skills(
-            tmp.path(),
-            None,
-            &["bad name!".to_string()],
-            &[],
-            &[],
-        );
+        let result = discover_skills(tmp.path(), None, &["bad name!".to_string()], &[], &[]);
         assert!(result.is_err());
     }
 
@@ -219,14 +199,8 @@ mod tests {
         std::fs::create_dir_all(skills_dir.join("empty-skill")).unwrap();
         // No SKILL.md
 
-        let loaded = discover_skills(
-            &skills_dir,
-            None,
-            &["empty-skill".to_string()],
-            &[],
-            &[],
-        )
-        .unwrap();
+        let loaded =
+            discover_skills(&skills_dir, None, &["empty-skill".to_string()], &[], &[]).unwrap();
 
         assert!(loaded.is_empty());
     }

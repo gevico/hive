@@ -34,10 +34,7 @@ pub fn run(state_filter: Option<String>) -> Result<()> {
     for s in &filtered {
         println!(
             "{:<30} {:<12} {:<10} {}",
-            s.task_id,
-            s.state,
-            s.approval_status,
-            s.draft_id,
+            s.task_id, s.state, s.approval_status, s.draft_id,
         );
     }
 
