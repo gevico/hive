@@ -23,14 +23,8 @@ pub(crate) fn claim_task(paths: &HivePaths, task_id: &str) -> Result<()> {
 
     // Check if all dependencies are completed
     let all_states = storage::load_all_states(paths)?;
-    let spec_content = std::fs::read_to_string(paths.spec_file(task_id)).ok();
-    let depends_on = if let Some(ref content) = spec_content {
-        hive_core::task::parse_spec(content)
-            .map(|s| s.depends_on)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let spec_content = std::fs::read_to_string(paths.spec_file(task_id))?;
+    let depends_on = hive_core::task::parse_spec(&spec_content)?.depends_on;
 
     let deps_completed = depends_on.iter().all(|dep| {
         all_states

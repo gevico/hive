@@ -1,6 +1,6 @@
 use hive_core::state::{TaskState, TransitionAction};
 use hive_core::storage::{HivePaths, TaskStateFile, read_task_state, write_task_state};
-use hive_core::task::{self, ApprovalStatus};
+use hive_core::task;
 
 use tempfile::TempDir;
 
@@ -24,12 +24,6 @@ fn create_task(paths: &HivePaths, task_id: &str, draft_id: &str) {
     write_task_state(paths, &state).unwrap();
 }
 
-fn create_approved_task(paths: &HivePaths, task_id: &str, draft_id: &str) {
-    let mut state = TaskStateFile::new(task_id.into(), draft_id.into(), "testhash".into());
-    state.approval_status = ApprovalStatus::Approved;
-    write_task_state(paths, &state).unwrap();
-}
-
 #[test]
 fn full_state_transition_happy_path() {
     let state = TaskState::Pending;
@@ -43,11 +37,15 @@ fn full_state_transition_happy_path() {
     assert_eq!(state, TaskState::InProgress);
 
     // in_progress -> review
-    let state = state.transition(TransitionAction::SubmitForReview, 0, true).unwrap();
+    let state = state
+        .transition(TransitionAction::SubmitForReview, 0, true)
+        .unwrap();
     assert_eq!(state, TaskState::Review);
 
     // review -> completed
-    let state = state.transition(TransitionAction::Complete, 0, true).unwrap();
+    let state = state
+        .transition(TransitionAction::Complete, 0, true)
+        .unwrap();
     assert_eq!(state, TaskState::Completed);
 }
 
@@ -86,7 +84,9 @@ fn retry_limit_blocks() {
     assert_eq!(blocked, TaskState::Blocked);
 
     // Blocked can be unblocked manually
-    let pending = blocked.transition(TransitionAction::Unblock, 0, true).unwrap();
+    let pending = blocked
+        .transition(TransitionAction::Unblock, 0, true)
+        .unwrap();
     assert_eq!(pending, TaskState::Pending);
 }
 

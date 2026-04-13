@@ -43,19 +43,31 @@ impl TestRepo {
     }
 
     fn write_task(&self, task_id: &str, draft_id: &str, state: TaskState, spec_body: &str) {
-        let spec = format!(
+        self.write_task_with(task_id, draft_id, state, &format!(
             "---\nid: {task_id}\ndraft_id: {draft_id}\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\n{spec_body}\n"
-        );
-        std::fs::write(self.paths.spec_file(task_id), &spec).unwrap();
+        ), true);
+    }
+
+    fn write_task_with(
+        &self,
+        task_id: &str,
+        draft_id: &str,
+        state: TaskState,
+        spec: &str,
+        with_plan: bool,
+    ) {
+        std::fs::write(self.paths.spec_file(task_id), spec).unwrap();
 
         let plan_dir = self.paths.plans_dir().join(draft_id);
         std::fs::create_dir_all(&plan_dir).unwrap();
-        std::fs::write(self.paths.plan_file(draft_id, task_id), "# plan\n").unwrap();
+        if with_plan {
+            std::fs::write(self.paths.plan_file(draft_id, task_id), "# plan\n").unwrap();
+        }
 
         let mut task_state = TaskStateFile::new(
             task_id.to_string(),
             draft_id.to_string(),
-            spec_content_hash(&spec),
+            spec_content_hash(spec),
         );
         task_state.state = state;
         task_state.approval_status = ApprovalStatus::Approved;
@@ -138,4 +150,119 @@ fn exec_does_not_complete_task_when_check_fails() {
     let state = read_task_state(&repo.paths, task_id).unwrap();
     assert_eq!(state.state, TaskState::Blocked);
     assert_eq!(state.retry_count, 3);
+}
+
+#[test]
+fn exec_skips_missing_plan_without_stalling() {
+    let task_id = "test-03TASK";
+    let repo = TestRepo::new(&custom_launch_config(task_id));
+    let spec = format!(
+        "---\nid: {task_id}\ndraft_id: draft-03\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\nverify-command: true\n"
+    );
+    repo.write_task_with(task_id, "draft-03", TaskState::Pending, &spec, false);
+
+    let output = repo.run_hive(&["exec"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("plan not found for task"),
+        "{output:?}"
+    );
+
+    let state = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(state.state, TaskState::Pending);
+    assert_eq!(state.retry_count, 0);
+}
+
+#[test]
+fn exec_skips_dependents_of_missing_plan_tasks() {
+    let upstream = "test-03UP";
+    let downstream = "test-03DOWN";
+    let repo = TestRepo::new(&custom_launch_config(upstream));
+
+    let upstream_spec = format!(
+        "---\nid: {upstream}\ndraft_id: draft-03b\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\nverify-command: true\n"
+    );
+    repo.write_task_with(upstream, "draft-03b", TaskState::Pending, &upstream_spec, false);
+
+    let downstream_spec = format!(
+        "---\nid: {downstream}\ndraft_id: draft-03b\ndepends_on:\n  - {upstream}\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\nverify-command: true\n"
+    );
+    repo.write_task_with(
+        downstream,
+        "draft-03b",
+        TaskState::Pending,
+        &downstream_spec,
+        true,
+    );
+
+    let output = repo.run_hive(&["exec"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("plan not found for task test-03UP, skipping"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("task test-03DOWN depends on skipped task test-03UP, skipping"),
+        "{stderr}"
+    );
+
+    let upstream_state = read_task_state(&repo.paths, upstream).unwrap();
+    let downstream_state = read_task_state(&repo.paths, downstream).unwrap();
+    assert_eq!(upstream_state.state, TaskState::Pending);
+    assert_eq!(downstream_state.state, TaskState::Pending);
+}
+
+#[test]
+fn exec_fails_fast_on_malformed_spec() {
+    let task_id = "test-04TASK";
+    let repo = TestRepo::new(&custom_launch_config(task_id));
+    let spec = format!(
+        "---\nid: {task_id}\ndraft_id: draft-04\ncomplexity: S\napproval_status: approved\ndepends_on: invalid\nschema_version: 1\n---\nverify-command: true\n"
+    );
+    repo.write_task_with(task_id, "draft-04", TaskState::Pending, &spec, true);
+
+    let output = repo.run_hive(&["exec"]);
+    assert!(!output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("invalid spec for task"),
+        "{output:?}"
+    );
+
+    let state = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(state.state, TaskState::Pending);
+}
+
+#[test]
+fn exec_blocks_downstream_when_dependency_blocks() {
+    let upstream = "test-05UP";
+    let downstream = "test-05DOWN";
+    let repo = TestRepo::new(&custom_launch_config(upstream));
+    repo.write_task(
+        upstream,
+        "draft-05",
+        TaskState::Pending,
+        "verify-command: false",
+    );
+
+    let downstream_spec = format!(
+        "---\nid: {downstream}\ndraft_id: draft-05\ndepends_on:\n  - {upstream}\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\nverify-command: true\n"
+    );
+    repo.write_task_with(
+        downstream,
+        "draft-05",
+        TaskState::Pending,
+        &downstream_spec,
+        true,
+    );
+
+    let output = repo.run_hive(&["exec"]);
+    assert!(output.status.success(), "{output:?}");
+
+    let upstream_state = read_task_state(&repo.paths, upstream).unwrap();
+    let downstream_state = read_task_state(&repo.paths, downstream).unwrap();
+    assert_eq!(upstream_state.state, TaskState::Blocked);
+    assert_eq!(downstream_state.state, TaskState::Blocked);
+    assert_eq!(downstream_state.retry_count, 0);
 }

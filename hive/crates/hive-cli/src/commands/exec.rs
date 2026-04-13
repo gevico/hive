@@ -31,39 +31,18 @@ fn run_with_paths(repo_root: &std::path::Path, paths: &HivePaths) -> Result<()> 
         bail!("no approved tasks to execute");
     }
 
-    let mut deps: HashMap<String, Vec<String>> = HashMap::new();
-    for state in &approved {
-        let spec_path = paths.spec_file(&state.task_id);
-        let dep_list = if let Ok(content) = std::fs::read_to_string(&spec_path) {
-            hive_core::task::parse_spec(&content)
-                .map(|spec| spec.depends_on)
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        deps.insert(state.task_id.clone(), dep_list);
-    }
+    let preflight = preflight_approved_tasks(paths, &approved)?;
+    let deps = preflight.deps;
 
     if has_cycle(&deps) {
         bail!("circular dependency detected in task graph");
     }
 
-    for state in &approved {
-        let plan_path = paths.plan_file(&state.draft_id, &state.task_id);
-        if !plan_path.exists() {
-            eprintln!(
-                "warning: plan not found for task {}, skipping",
-                state.task_id
-            );
-        }
-    }
-
     let order = topological_sort(&deps);
-    let approved_ids: HashSet<String> =
-        approved.iter().map(|state| state.task_id.clone()).collect();
+    let executable_ids: HashSet<String> = preflight.executable_ids;
 
     for task_id in &order {
-        if !approved_ids.contains(task_id) {
+        if !executable_ids.contains(task_id) {
             continue;
         }
 
@@ -73,11 +52,6 @@ fn run_with_paths(repo_root: &std::path::Path, paths: &HivePaths) -> Result<()> 
         };
 
         if state.state == TaskState::Completed || state.state == TaskState::Blocked {
-            continue;
-        }
-
-        let plan_path = paths.plan_file(&state.draft_id, task_id);
-        if !plan_path.exists() {
             continue;
         }
 
@@ -92,7 +66,7 @@ fn run_with_paths(repo_root: &std::path::Path, paths: &HivePaths) -> Result<()> 
         }
     }
 
-    let remaining: Vec<_> = approved_ids
+    let remaining: Vec<_> = executable_ids
         .iter()
         .filter_map(|task_id| {
             storage::read_task_state(paths, task_id)
@@ -130,6 +104,10 @@ fn execute_task(
         let state = storage::read_task_state(paths, task_id)?;
         match state.state {
             TaskState::Pending => {
+                if let Some(dep) = first_blocked_dependency(paths, task_id)? {
+                    block_task_due_to_dependency(paths, task_id, &dep)?;
+                    return Ok(TaskExecutionResult::Deferred);
+                }
                 if let Err(err) = claim::claim_task(paths, task_id) {
                     if let Some(hive_core::HiveError::DependencyNotMet(_)) =
                         err.downcast_ref::<hive_core::HiveError>()
@@ -192,6 +170,71 @@ fn execute_task(
     }
 }
 
+struct PreflightTasks {
+    deps: HashMap<String, Vec<String>>,
+    executable_ids: HashSet<String>,
+}
+
+fn preflight_approved_tasks(
+    paths: &HivePaths,
+    approved: &[&hive_core::storage::TaskStateFile],
+) -> Result<PreflightTasks> {
+    let mut deps = HashMap::new();
+    let mut skipped: HashSet<String> = HashSet::new();
+
+    for state in approved {
+        let spec_path = paths.spec_file(&state.task_id);
+        let spec_content = std::fs::read_to_string(&spec_path).map_err(|e| {
+            anyhow!(
+                "failed to read spec for task {} at {}: {e}",
+                state.task_id,
+                spec_path.display()
+            )
+        })?;
+        let spec = hive_core::task::parse_spec(&spec_content)
+            .map_err(|e| anyhow!("invalid spec for task {}: {e}", state.task_id))?;
+        deps.insert(state.task_id.clone(), spec.depends_on);
+
+        let plan_path = paths.plan_file(&state.draft_id, &state.task_id);
+        if !plan_path.exists() {
+            eprintln!(
+                "warning: plan not found for task {}, skipping",
+                state.task_id
+            );
+            skipped.insert(state.task_id.clone());
+        }
+    }
+
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (task_id, task_deps) in &deps {
+            if skipped.contains(task_id) {
+                continue;
+            }
+            if let Some(dep) = task_deps.iter().find(|dep| skipped.contains(*dep)) {
+                eprintln!(
+                    "warning: task {} depends on skipped task {}, skipping",
+                    task_id, dep
+                );
+                skipped.insert(task_id.clone());
+                changed = true;
+            }
+        }
+    }
+
+    let executable_ids = deps
+        .keys()
+        .filter(|task_id| !skipped.contains(*task_id))
+        .cloned()
+        .collect();
+
+    Ok(PreflightTasks {
+        deps,
+        executable_ids,
+    })
+}
+
 fn complete_task(paths: &HivePaths, task_id: &str) -> Result<()> {
     let _lock = FileLock::try_acquire(&paths.lock_file(task_id)).ok();
     let mut state = storage::read_task_state(paths, task_id)?;
@@ -210,6 +253,38 @@ fn complete_task(paths: &HivePaths, task_id: &str) -> Result<()> {
     state.touch();
     storage::write_task_state(paths, &state)?;
     runtime::log_state_change(paths, task_id, &from_state, &state.state.to_string())?;
+    Ok(())
+}
+
+fn first_blocked_dependency(paths: &HivePaths, task_id: &str) -> Result<Option<String>> {
+    let spec_content = std::fs::read_to_string(paths.spec_file(task_id))?;
+    let depends_on = hive_core::task::parse_spec(&spec_content)?.depends_on;
+    let states = storage::load_all_states(paths)?;
+
+    Ok(depends_on.into_iter().find(|dep| {
+        states
+            .iter()
+            .any(|state| state.task_id == *dep && state.state == TaskState::Blocked)
+    }))
+}
+
+fn block_task_due_to_dependency(
+    paths: &HivePaths,
+    task_id: &str,
+    dependency_id: &str,
+) -> Result<()> {
+    let _lock = FileLock::try_acquire(&paths.lock_file(task_id)).ok();
+    let mut state = storage::read_task_state(paths, task_id)?;
+    if matches!(state.state, TaskState::Completed | TaskState::Blocked) {
+        return Ok(());
+    }
+
+    let previous_state = state.state.to_string();
+    state.state = TaskState::Blocked;
+    state.touch();
+    storage::write_task_state(paths, &state)?;
+    runtime::log_state_change(paths, task_id, &previous_state, &state.state.to_string())?;
+    eprintln!("  task {task_id}: blocked because dependency {dependency_id} is blocked");
     Ok(())
 }
 
