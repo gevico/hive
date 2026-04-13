@@ -162,17 +162,27 @@ pub fn run() -> Result<()> {
                 );
                 warnings += 1;
             }
-            // Check monotonic timestamps (append-only invariant)
+            // Validate each entry matches CLI-written format and check invariants
             let mut prev_ts = String::new();
             let mut entry_count = 0u32;
+            let mut format_violations = 0u32;
             for line in content.lines() {
-                if line.starts_with("- [") {
-                    entry_count += 1;
+                // Skip header and blank lines
+                if line.is_empty() || line.starts_with('#') {
+                    continue;
                 }
-                if let Some(ts_start) = line.find('[')
-                    && let Some(ts_end) = line[ts_start + 1..].find(']')
-                {
-                    let ts = &line[ts_start + 1..ts_start + 1 + ts_end];
+                // Each content line must match CLI format: "- [timestamp] [event_type] detail"
+                if !line.starts_with("- [") {
+                    format_violations += 1;
+                    continue;
+                }
+                entry_count += 1;
+
+                // Validate structure: must have at least 2 bracket pairs
+                let after_first = &line[2..]; // skip "- "
+                if let Some(ts_end) = after_first.find(']') {
+                    let ts = &after_first[1..ts_end];
+                    // Check timestamp monotonicity
                     if !prev_ts.is_empty() && ts < prev_ts.as_str() {
                         println!(
                             "[warn] audit file for {} has non-monotonic timestamps (possible tampering)",
@@ -182,7 +192,23 @@ pub fn run() -> Result<()> {
                         break;
                     }
                     prev_ts = ts.to_string();
+
+                    // After timestamp, expect " [event_type]"
+                    let after_ts = &after_first[ts_end + 1..];
+                    if !after_ts.starts_with(" [") || !after_ts.contains(']') {
+                        format_violations += 1;
+                    }
+                } else {
+                    format_violations += 1;
                 }
+            }
+
+            if format_violations > 0 {
+                println!(
+                    "[warn] audit file for {} has {} non-CLI-format lines (possible external write)",
+                    s.task_id, format_violations
+                );
+                warnings += 1;
             }
 
             // Cross-check: task with state transitions should have audit entries

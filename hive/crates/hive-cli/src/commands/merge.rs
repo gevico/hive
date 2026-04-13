@@ -26,12 +26,13 @@ pub fn run(task: Option<String>, all: bool, mode: String) -> Result<()> {
     Ok(())
 }
 
+/// Returns true if the task was actually merged into the default branch.
 fn merge_task(
     repo_root: &std::path::Path,
     paths: &HivePaths,
     task_id: &str,
     mode: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let state = storage::read_task_state(paths, task_id)?;
     if state.state != TaskState::Completed {
         bail!(
@@ -133,7 +134,7 @@ fn merge_task(
         }
     }
 
-    Ok(())
+    Ok(actually_merged)
 }
 
 fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Result<()> {
@@ -185,11 +186,19 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
             }
         }
         match merge_task(repo_root, paths, task_id, mode) {
-            Ok(()) => {
+            Ok(true) => {
+                // Actually merged into main — downstream can proceed
                 merged.insert(task_id.clone());
             }
+            Ok(false) => {
+                // PR created or branch ready — NOT merged yet
+                eprintln!(
+                    "task {task_id}: pending review (not yet on main), downstream blocked"
+                );
+                // Don't add to merged set; don't stop — just skip this one
+            }
             Err(e) => {
-                // Stop downstream processing when upstream merge fails
+                // Hard failure — stop downstream
                 eprintln!("failed to merge {task_id}: {e}");
                 eprintln!("stopping merge --all: upstream failure prevents downstream merges");
                 break;

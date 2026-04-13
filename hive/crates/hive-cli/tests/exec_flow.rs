@@ -357,3 +357,66 @@ fn approve_works_from_spec_only_without_state_json() {
     let state = read_task_state(&repo.paths, task_id).unwrap();
     assert_eq!(state.approval_status, ApprovalStatus::Approved);
 }
+
+#[test]
+fn approve_idempotent_no_state_change() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "idem-task";
+    let draft_id = "draft-idem";
+
+    // Write spec and bootstrap state via first approve
+    let spec = format!(
+        "---\nid: {task_id}\ndraft_id: {draft_id}\ncomplexity: S\nschema_version: 1\n---\nGoal\n"
+    );
+    std::fs::write(repo.paths.spec_file(task_id), &spec).unwrap();
+    let plan_dir = repo.paths.plans_dir().join(draft_id);
+    std::fs::create_dir_all(&plan_dir).unwrap();
+    std::fs::write(repo.paths.plan_file(draft_id, task_id), "# plan\n").unwrap();
+
+    let output1 = repo.run_hive(&["approve", "--draft", draft_id]);
+    assert!(output1.status.success());
+
+    let state_after_first = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(state_after_first.approval_status, ApprovalStatus::Approved);
+    let updated1 = state_after_first.updated_at;
+
+    // Second approve should be idempotent
+    let output2 = repo.run_hive(&["approve", "--draft", draft_id]);
+    assert!(output2.status.success());
+    let stdout2 = String::from_utf8_lossy(&output2.stdout);
+    assert!(
+        stdout2.contains("already approved"),
+        "second approve should say already approved, got: {stdout2}"
+    );
+
+    // State should not have changed
+    let state_after_second = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(state_after_second.updated_at, updated1);
+}
+
+#[test]
+fn check_command_verifier_records_stderr_detail() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "check-cmd-task";
+
+    // Create task in review state with a command that fails and prints to stderr
+    repo.write_task(
+        task_id,
+        "draft-cmd",
+        TaskState::Review,
+        "verify-command: echo 'test-error-output' >&2 && false",
+    );
+
+    let output = repo.run_hive(&["check", "--task", task_id]);
+    assert_eq!(output.status.code(), Some(1));
+
+    // Check that results file captures the stderr detail
+    let results_path = repo.paths.task_dir(task_id).join("check-results.md");
+    let results = std::fs::read_to_string(&results_path).unwrap_or_default();
+    assert!(
+        results.contains("stderr:") || results.contains("test-error-output"),
+        "check-results.md should contain stderr detail, got: {results}"
+    );
+}
