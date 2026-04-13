@@ -41,20 +41,26 @@ fn merge_task(
         );
     }
 
-    // Verify dependencies are already merged (their worktrees cleaned up)
+    // Verify dependencies are already merged (not just completed)
     let spec_path = paths.spec_file(task_id);
     if let Ok(content) = std::fs::read_to_string(&spec_path)
-        && let Ok(spec) = hive_core::task::parse_spec(&content) {
-            for dep in &spec.depends_on {
-                let dep_state = storage::read_task_state(paths, dep)?;
-                if dep_state.state != TaskState::Completed {
-                    bail!(
-                        "cannot merge {task_id}: dependency {dep} is in state '{}'",
-                        dep_state.state
-                    );
-                }
+        && let Ok(spec) = hive_core::task::parse_spec(&content)
+    {
+        for dep in &spec.depends_on {
+            let dep_state = storage::read_task_state(paths, dep)?;
+            if dep_state.state != TaskState::Completed {
+                bail!(
+                    "cannot merge {task_id}: dependency {dep} is in state '{}'",
+                    dep_state.state
+                );
+            }
+            if !dep_state.merged {
+                bail!(
+                    "cannot merge {task_id}: dependency {dep} is completed but not yet merged"
+                );
             }
         }
+    }
 
     let task_branch = worktree::branch_name(task_id);
     let default = branch::default_branch(repo_root)?;
@@ -115,6 +121,13 @@ fn merge_task(
             }
         }
     }
+
+    // Mark task as merged in state.json
+    let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
+    let mut state = storage::read_task_state(paths, task_id)?;
+    state.merged = true;
+    state.touch();
+    storage::write_task_state(paths, &state)?;
 
     Ok(())
 }

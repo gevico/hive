@@ -66,6 +66,27 @@ impl Frontmatter {
             .and_then(|v| u32::try_from(v).ok())
     }
 
+    /// Typed numeric accessor: distinguishes missing from wrong-type.
+    /// Returns Ok(None) if field is absent, Ok(Some(v)) if valid u32,
+    /// Err if present but not a valid integer.
+    pub fn typed_u32(&self, key: &str) -> HiveResult<Option<u32>> {
+        match self.fields.get(Value::String(key.to_string())) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => match v.as_u64() {
+                Some(n) => u32::try_from(n)
+                    .map(Some)
+                    .map_err(|_| HiveError::InvalidFieldValue {
+                        field: key.to_string(),
+                        reason: format!("value {n} out of u32 range"),
+                    }),
+                None => Err(HiveError::InvalidFieldValue {
+                    field: key.to_string(),
+                    reason: format!("expected integer, got {v:?}"),
+                }),
+            },
+        }
+    }
+
     pub fn get_string_list(&self, key: &str) -> Option<Vec<String>> {
         self.fields
             .get(Value::String(key.to_string()))
@@ -110,8 +131,9 @@ impl Frontmatter {
 }
 
 /// Validate schema_version field. Returns the version number.
+/// Uses typed accessor: wrong-type values are rejected, not defaulted.
 pub fn validate_schema_version(fm: &Frontmatter) -> HiveResult<u32> {
-    match fm.get_u32("schema_version") {
+    match fm.typed_u32("schema_version")? {
         Some(1) => Ok(1),
         Some(v) if v > 1 => Err(HiveError::UnsupportedSchemaVersion(v)),
         Some(v) => Ok(v),

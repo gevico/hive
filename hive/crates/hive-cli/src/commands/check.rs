@@ -60,11 +60,11 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
     let mut all_pass = true;
     let mut results_log = String::from("# Verification Results\n\n");
     for criterion in &criteria {
-        // Each verifier returns (passed, optional_rejection_reason)
+        // Each verifier returns (passed, optional_detail)
         let result: Result<(bool, Option<String>)> = match criterion {
-            Criterion::Command(cmd) => verify_command(&wt_path, cmd).map(|b| (b, None)),
+            Criterion::Command(cmd) => verify_command(&wt_path, cmd),
             Criterion::File { path, pattern } => {
-                verify_file(&wt_path, path, pattern.as_deref()).map(|b| (b, None))
+                verify_file(&wt_path, path, pattern.as_deref())
             }
             Criterion::Manual(desc) => verify_manual(desc),
         };
@@ -96,6 +96,17 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
     let task_dir = paths.task_dir(task_id);
     if task_dir.exists() {
         let _ = std::fs::write(task_dir.join("check-results.md"), &results_log);
+    }
+
+    // Log check outcome at full audit level
+    if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
+        let outcome = if all_pass { "all pass" } else { "some fail" };
+        let _ = hive_audit::log_decision(
+            &paths.audit_file(task_id),
+            config.audit_level,
+            task_id,
+            &format!("check outcome: {outcome}"),
+        );
     }
 
     if all_pass {
@@ -152,28 +163,39 @@ fn parse_criteria(body: &str) -> Vec<Criterion> {
     criteria
 }
 
-fn verify_command(worktree: &std::path::Path, cmd: &str) -> Result<bool> {
+/// Returns (passed, detail) where detail captures failure reason for recording.
+fn verify_command(worktree: &std::path::Path, cmd: &str) -> Result<(bool, Option<String>)> {
     let output = Command::new("sh")
         .args(["-c", cmd])
         .current_dir(worktree)
         .output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        eprintln!("    stderr: {stderr}");
+    if output.status.success() {
+        Ok((true, None))
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Ok((false, Some(format!("exit {}, stderr: {stderr}", output.status))))
     }
-    Ok(output.status.success())
 }
 
-fn verify_file(worktree: &std::path::Path, path: &str, pattern: Option<&str>) -> Result<bool> {
+/// Returns (passed, detail) distinguishing missing file from pattern mismatch.
+fn verify_file(
+    worktree: &std::path::Path,
+    path: &str,
+    pattern: Option<&str>,
+) -> Result<(bool, Option<String>)> {
     let file_path = worktree.join(path);
     if !file_path.exists() {
-        return Ok(false);
+        return Ok((false, Some(format!("file not found: {path}"))));
     }
     if let Some(pattern) = pattern {
         let content = std::fs::read_to_string(&file_path)?;
-        Ok(content.contains(pattern))
+        if content.contains(pattern) {
+            Ok((true, None))
+        } else {
+            Ok((false, Some(format!("pattern '{pattern}' not found in {path}"))))
+        }
     } else {
-        Ok(true)
+        Ok((true, None))
     }
 }
 

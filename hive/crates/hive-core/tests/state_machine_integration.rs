@@ -153,3 +153,49 @@ fn spec_sha256_deterministic() {
     let h2 = task::spec_content_hash("test");
     assert_eq!(h1, h2);
 }
+
+#[test]
+fn schema_version_string_type_rejected() {
+    // schema_version: "1" (string) must be rejected, not defaulted
+    let content = "---\nid: t\ndraft_id: d\ncomplexity: S\nschema_version: \"1\"\n---\n";
+    let result = task::parse_spec(content);
+    assert!(result.is_err(), "string-typed schema_version should be rejected");
+}
+
+#[test]
+fn rlcr_max_rounds_string_type_rejected() {
+    let content =
+        "---\nid: t\ndraft_id: d\ncomplexity: S\nschema_version: 1\nrlcr_max_rounds: \"3\"\n---\n";
+    let result = task::parse_spec(content);
+    assert!(result.is_err(), "string-typed rlcr_max_rounds should be rejected");
+}
+
+#[test]
+fn rlcr_max_rounds_exceeding_limit_rejected() {
+    // S complexity allows max 2 rounds
+    let content =
+        "---\nid: t\ndraft_id: d\ncomplexity: S\nschema_version: 1\nrlcr_max_rounds: 5\n---\n";
+    let result = task::parse_spec(content);
+    assert!(
+        matches!(result, Err(hive_core::HiveError::ConstraintViolation(_))),
+        "rlcr_max_rounds exceeding complexity limit should be rejected"
+    );
+}
+
+#[test]
+fn rlcr_max_rounds_within_limit_accepted() {
+    let content =
+        "---\nid: t\ndraft_id: d\ncomplexity: M\nschema_version: 1\nrlcr_max_rounds: 3\n---\n";
+    let spec = task::parse_spec(content).unwrap();
+    assert_eq!(spec.complexity, task::Complexity::M);
+}
+
+#[test]
+fn state_json_without_merged_field_loads() {
+    // Test backward compatibility: old state.json without "merged" field
+    let (_tmp, paths) = setup_hive();
+    create_task(&paths, "old-task", "d1");
+    // Read back — merged should default to false
+    let state = read_task_state(&paths, "old-task").unwrap();
+    assert!(!state.merged);
+}

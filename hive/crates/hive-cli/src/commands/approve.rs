@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use hive_core::config;
 use hive_core::storage::{self, HivePaths};
 use hive_core::task::ApprovalStatus;
@@ -12,39 +12,75 @@ pub fn run(draft_id: String) -> Result<()> {
         bail!("not a hive project. Run `hive init` first");
     }
 
-    let states = storage::load_all_states(&paths)?;
-    let draft_tasks: Vec<_> = states.iter().filter(|s| s.draft_id == draft_id).collect();
+    // Discover draft tasks by scanning specs/ (same as rfc)
+    let specs_dir = paths.specs_dir();
+    let mut draft_task_ids: Vec<String> = Vec::new();
 
-    if draft_tasks.is_empty() {
+    if specs_dir.exists() {
+        for entry in std::fs::read_dir(&specs_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                let content = std::fs::read_to_string(&path)
+                    .with_context(|| format!("failed to read spec: {}", path.display()))?;
+                let spec = hive_core::task::parse_spec(&content)
+                    .with_context(|| format!("invalid spec: {}", path.display()))?;
+                if spec.draft_id == draft_id {
+                    draft_task_ids.push(spec.id.clone());
+                }
+            }
+        }
+    }
+
+    // Also check state.json for tasks that may not have spec files
+    let states = storage::load_all_states(&paths)?;
+    for s in &states {
+        if s.draft_id == draft_id && !draft_task_ids.contains(&s.task_id) {
+            draft_task_ids.push(s.task_id.clone());
+        }
+    }
+
+    if draft_task_ids.is_empty() {
         bail!("draft not found: {draft_id}");
     }
 
-    // GitHub advisory check: warn if RFC PR is not merged
+    // GitHub advisory check
     let hive_config = config::load_config(&paths.hive_dir())?;
     if hive_config.rfc.platform == "github"
-        && merge::check_tool_available("gh").is_ok() {
-            let rfc_branch = format!("hive/rfc/{draft_id}");
-            let output = std::process::Command::new("gh")
-                .args(["pr", "view", &rfc_branch, "--json", "state", "-q", ".state"])
-                .output();
-            if let Ok(o) = output
-                && o.status.success() {
-                    let state = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                    if state != "MERGED" {
-                        eprintln!(
-                            "advisory: RFC PR for {draft_id} is in state '{state}', not merged"
-                        );
-                    }
-                }
+        && merge::check_tool_available("gh").is_ok()
+    {
+        let rfc_branch = format!("hive/rfc/{draft_id}");
+        let output = std::process::Command::new("gh")
+            .args(["pr", "view", &rfc_branch, "--json", "state", "-q", ".state"])
+            .output();
+        if let Ok(o) = output
+            && o.status.success()
+        {
+            let state = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if state != "MERGED" {
+                eprintln!(
+                    "advisory: RFC PR for {draft_id} is in state '{state}', not merged"
+                );
+            }
         }
+    }
 
-    // Idempotent: already approved is fine
+    // Approve: bootstrap state if needed, idempotent for already-approved
     let mut count = 0;
-    for s in &draft_tasks {
-        if s.approval_status == ApprovalStatus::Approved {
+    for task_id in &draft_task_ids {
+        let mut state = match storage::read_task_state(&paths, task_id) {
+            Ok(s) => s,
+            Err(_) => {
+                // Bootstrap state from spec
+                let hash = hive_core::task::spec_content_hash(
+                    &std::fs::read_to_string(paths.spec_file(task_id)).unwrap_or_default(),
+                );
+                storage::TaskStateFile::new(task_id.clone(), draft_id.clone(), hash)
+            }
+        };
+        if state.approval_status == ApprovalStatus::Approved {
             continue;
         }
-        let mut state = storage::read_task_state(&paths, &s.task_id)?;
         state.approval_status = ApprovalStatus::Approved;
         state.touch();
         storage::write_task_state(&paths, &state)?;

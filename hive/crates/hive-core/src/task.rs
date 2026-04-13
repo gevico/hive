@@ -159,8 +159,8 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
     let skills = fm.optional_string_list("skills")?.unwrap_or_default();
     let exclude_skills = fm.optional_string_list("exclude_skills")?.unwrap_or_default();
 
-    // Validate rlcr_max_rounds if present: must not exceed complexity mapping
-    if let Some(max_rounds) = fm.get_u32("rlcr_max_rounds") {
+    // Validate rlcr_max_rounds: typed accessor rejects wrong types
+    if let Some(max_rounds) = fm.typed_u32("rlcr_max_rounds")? {
         let limit = complexity.rlcr_max_rounds();
         if max_rounds > limit {
             return Err(HiveError::ConstraintViolation(format!(

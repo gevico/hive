@@ -19,6 +19,8 @@ pub struct TaskStateFile {
     pub approval_status: ApprovalStatus,
     pub spec_content_hash: String,
     pub base_commit: Option<String>,
+    #[serde(default)]
+    pub merged: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -40,6 +42,7 @@ impl TaskStateFile {
             approval_status: ApprovalStatus::Draft,
             spec_content_hash: spec_hash,
             base_commit: None,
+            merged: false,
             created_at: now,
             updated_at: now,
         }
