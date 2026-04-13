@@ -291,7 +291,7 @@ $ hive init
   ├─ 1. 检查当前目录是否为 git 仓库，不是则报错退出
   │
   ├─ 2. 创建 .hive/ 目录结构
-  │     mkdir -p .hive/{specs,reports,plans,tasks,worktrees}
+  │     mkdir -p .hive/{specs,reports,plans,tasks,skills,worktrees}
   │
   ├─ 3. 生成 .hive/config.yml
   │     写入全局配置模板（含所有选项 + # 注释说明可选值）
@@ -330,7 +330,202 @@ $ hive init
 
 ---
 
-## 7. 任务状态机
+## 7. Skill 系统
+
+Skill 是 Layer 2 实现层的能力扩展。Layer 1（Rust CLI 约束层）不使用 skill——它的行为必须硬编码、确定性、不可绕过。
+
+### 7.1 Skill 分层
+
+```
+三层 skill 来源：
+
+1. 仓库私有 skill        .hive/skills/<name>.md         提交到仓库
+2. 用户全局 skill        ~/.config/hive/skills/<name>.md  个人本地
+3. 系统级 skill（plugin） agent 工具内置（如 humanize、superpowers）
+```
+
+目录结构：
+
+```
+.hive/skills/                        # 仓库私有 skill（提交）
+├── coding-style.md                  # 本项目编码规范
+├── db-migration.md                  # 本项目 DB 迁移流程
+└── deploy-checklist.md              # 本项目部署检查清单
+
+~/.config/hive/skills/               # 用户全局 skill
+├── my-rust-patterns.md
+└── review-checklist.md
+```
+
+### 7.2 Skill 查找优先级
+
+spec 中引用的 skill 名称按以下顺序查找，先找到的优先：
+
+```
+1. .hive/skills/<name>.md            仓库私有（最高优先级）
+2. ~/.config/hive/skills/<name>.md    用户全局
+3. agent 工具内置 plugin              系统级（如 humanize）
+```
+
+仓库私有 skill 可以覆盖同名的全局或系统级 skill，实现项目定制。
+
+### 7.3 Skill 配置
+
+```yaml
+# .hive/config.yml
+
+skills:
+  # Always loaded for all tasks (unless explicitly excluded in spec)
+  default:
+    - coding-style                   # repo: .hive/skills/coding-style.md
+
+  # Available but only loaded when declared in spec
+  available:
+    - humanize                       # system plugin
+    - db-migration                   # repo: .hive/skills/db-migration.md
+    - deploy-checklist               # repo: .hive/skills/deploy-checklist.md
+```
+
+- `default`：所有任务自动加载（除非 spec 中用 `exclude_skills` 排除）
+- `available`：声明可用 skill 列表，仅在 spec 中显式引用时加载
+
+### 7.4 Spec 中声明 Skill
+
+```markdown
+# .hive/specs/chao-a1b2c3d4.md
+---
+id: chao-a1b2c3d4
+skills:
+  - humanize                         # 系统级 — RLCR 质量循环
+  - db-migration                     # 仓库私有 — DB 迁移流程
+exclude_skills:
+  - coding-style                     # 排除默认 skill（该任务不需要）
+---
+```
+
+`hive launch` 根据 spec 计算最终 skill 列表：
+
+```
+最终 skill = (config.default - spec.exclude_skills) + spec.skills
+```
+
+只加载最终列表中的 skill，worker agent 的上下文保持精简。
+
+### 7.5 `hive launch` 加载行为
+
+```bash
+# 根据 spec 中的 skills 字段，只加载指定 skill
+# tool: claude
+claude --plugin humanize \
+       --skill .hive/skills/db-migration.md \
+       --agent-prompt "..."
+
+# tool: codex
+codex --prompt "$(cat .hive/tasks/chao-a1b2c3d4/plan.md)" \
+      --instructions "$(cat .hive/skills/db-migration.md)"
+```
+
+### 7.6 Skill 管理命令
+
+```
+hive skill <subcommand>
+```
+
+| 命令 | 作用 |
+|------|------|
+| `hive skill list` | 列出所有可用 skill（仓库 + 全局 + 系统级），标注来源和加载状态 |
+| `hive skill add <name> [--global]` | 创建空 skill 模板，默认到 `.hive/skills/`，`--global` 到 `~/.config/hive/skills/` |
+| `hive skill remove <name> [--global]` | 删除指定 skill 文件 |
+| `hive skill show <name>` | 查看 skill 内容和解析来源 |
+| `hive skill install <url\|path>` | 从远程 URL 或本地路径安装 skill |
+| `hive skill uninstall <name> [--global]` | 卸载已安装的 skill |
+
+### 7.7 安装与卸载流程
+
+**从远程安装（URL/Git）：**
+
+```
+$ hive skill install https://github.com/user/repo/skills/tdd.md
+  │
+  ├─ 1. 下载 skill 文件
+  ├─ 2. 验证格式（必须包含 YAML frontmatter: name, description）
+  ├─ 3. 复制到 .hive/skills/tdd.md（默认仓库级）
+  │     或 ~/.config/hive/skills/tdd.md（加 --global）
+  └─ 4. 输出：Installed skill: tdd (repo)
+
+$ hive skill install https://github.com/user/repo/skills/tdd.md --global
+  └─ 安装到 ~/.config/hive/skills/tdd.md（全局）
+```
+
+**从本地路径安装：**
+
+```
+$ hive skill install ~/my-skills/code-review.md
+  └─ 复制到 .hive/skills/code-review.md
+```
+
+**批量安装（skill pack）：**
+
+```
+$ hive skill install https://github.com/user/skill-pack
+  │
+  ├─ 1. clone 仓库到临时目录
+  ├─ 2. 扫描 skills/ 目录下所有 .md 文件
+  ├─ 3. 逐个验证并复制到 .hive/skills/
+  └─ 4. 输出安装清单
+```
+
+**卸载：**
+
+```
+$ hive skill uninstall tdd
+  │
+  ├─ 1. 查找 .hive/skills/tdd.md
+  ├─ 2. 检查是否被任何 spec 或 config.yml 引用
+  │     ├─ 有引用 → 警告并要求 --force
+  │     └─ 无引用 → 直接删除
+  └─ 3. 输出：Uninstalled skill: tdd
+
+$ hive skill uninstall tdd --global
+  └─ 删除 ~/.config/hive/skills/tdd.md
+```
+
+**创建自定义 skill：**
+
+```
+$ hive skill add my-convention
+  │
+  ├─ 1. 创建 .hive/skills/my-convention.md 模板：
+  │     ---
+  │     name: my-convention
+  │     description: ""
+  │     ---
+  │
+  │     (write your skill content here)
+  │
+  └─ 2. 输出：Created skill template: .hive/skills/my-convention.md
+```
+
+### 7.8 Skill 文件格式
+
+```markdown
+---
+name: db-migration
+description: Database migration workflow for this project
+---
+
+## Rules
+
+- Always create a reversible migration
+- Test migration on a copy of production schema before applying
+- ...
+```
+
+Rust CLI 在安装时验证 frontmatter 必须包含 `name` 和 `description` 字段。
+
+---
+
+## 8. 任务状态机
 
 ### 7.1 任务执行状态 (status)
 
@@ -402,7 +597,7 @@ draft → rfc → approved → executing → done
 
 ---
 
-## 8. 计划生成流程
+## 9. 计划生成流程
 
 参考 superpowers brainstorming 的结构化设计流程，分 7 个阶段。
 
@@ -484,7 +679,7 @@ Agent 工具（Claude Code / Codex / ...）
 
 ---
 
-## 9. 任务文件格式
+## 10. 任务文件格式
 
 ### 9.1 specs/<id>.md
 
@@ -585,7 +780,7 @@ audit_level: standard
 
 ---
 
-## 10. 复杂度与 RLCR 轮次
+## 11. 复杂度与 RLCR 轮次
 
 `hive plan` 分解任务时自动评估复杂度并推荐 RLCR 轮次，用户审批时可调整。
 
@@ -597,7 +792,7 @@ audit_level: standard
 
 ---
 
-## 11. 冲突管理策略
+## 12. 冲突管理策略
 
 ### 11.1 核心原则
 
@@ -648,7 +843,7 @@ main
 
 ---
 
-## 12. RFC 流程
+## 13. RFC 流程
 
 ### 12.1 `hive rfc` 命令
 
@@ -683,7 +878,7 @@ draft       hive plan 生成完成
 
 ---
 
-## 13. 审计系统
+## 14. 审计系统
 
 ### 13.1 三档审计等级
 
@@ -791,7 +986,7 @@ audit_level: standard
 
 ---
 
-## 14. CLI 命令设计
+## 15. CLI 命令设计
 
 ```
 hive <command> [options]
@@ -810,7 +1005,8 @@ hive <command> [options]
 | `hive audit --draft <id>` | 生成 per-draft 审计报告到 `.hive/reports/` | 报告 |
 | `hive merge --task <id> \| --all` | 合并已完成任务（支持 `--mode pr`） | 集成 |
 | `hive abort` | 终止所有运行中的 agent，保留 worktree 供复盘 | 应急 |
-| `hive doctor` | 检查环境（git、claude、humanize、配置的模型等） | 诊断 |
+| `hive skill <sub>` | Skill 管理（list/add/remove/install/uninstall/show，见 Section 7.6） | 管理 |
+| `hive doctor` | 检查环境（git、agent 工具、skill、配置的模型等） | 诊断 |
 
 ### 14.2 Layer 1 — 子代理命令（由 `hive exec` 内部调用）
 
@@ -885,7 +1081,7 @@ my-agent --task chao-a1b2c3d4 --worktree .hive/worktrees/chao-a1b2c3d4
 
 ---
 
-## 15. 可复现性
+## 16. 可复现性
 
 每个 task 的 result.md 包含完整的环境快照，确保任何人都可以复现：
 
@@ -907,7 +1103,7 @@ hive retry --task <id>
 
 ---
 
-## 16. 执行流程全景图
+## 17. 执行流程全景图
 
 ```
 用户输入需求
