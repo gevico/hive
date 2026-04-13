@@ -27,3 +27,5 @@ anyhow = "1"
 ulid = "1"
 chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"

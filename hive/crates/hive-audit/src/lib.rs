@@ -1,11 +1,15 @@
 use std::path::Path;
 
 use chrono::Utc;
+use hmac::{Hmac, Mac};
 use hive_core::HiveResult;
 use hive_core::config::AuditLevel;
+use sha2::Sha256;
+
+type HmacSha256 = Hmac<Sha256>;
 
 /// Append an audit entry to a task's audit.md file.
-/// After writing, updates a trailing integrity hash for append-only verification.
+/// Uses HMAC-SHA256 with `.hive/audit.key` for CLI-exclusive integrity verification.
 pub fn append_entry(
     audit_path: &Path,
     level: AuditLevel,
@@ -24,7 +28,6 @@ pub fn append_entry(
         std::fs::create_dir_all(parent)?;
     }
 
-    // Read existing content (strip old integrity line if present)
     let existing = if audit_path.exists() {
         let content = std::fs::read_to_string(audit_path)?;
         strip_integrity_line(&content)
@@ -32,13 +35,14 @@ pub fn append_entry(
         String::from("# Audit Log\n\n")
     };
 
-    // Build new content with entry and fresh integrity hash
     let mut new_content = existing;
     new_content.push_str(&entry);
-    let hash = compute_integrity(&new_content);
+
+    // Compute HMAC using .hive/audit.key if available, fall back to plain SHA-256
+    let key = load_audit_key(audit_path);
+    let hash = compute_hmac(&new_content, &key);
     new_content.push_str(&format!("# integrity: {hash}\n"));
 
-    // Atomic write (not append) to update integrity
     std::fs::write(audit_path, &new_content)?;
     Ok(())
 }
@@ -47,9 +51,10 @@ pub fn append_entry(
 fn strip_integrity_line(content: &str) -> String {
     let mut lines: Vec<&str> = content.lines().collect();
     if let Some(last) = lines.last()
-        && last.starts_with("# integrity:") {
-            lines.pop();
-        }
+        && last.starts_with("# integrity:")
+    {
+        lines.pop();
+    }
     let mut result = lines.join("\n");
     if !result.ends_with('\n') {
         result.push('\n');
@@ -57,11 +62,27 @@ fn strip_integrity_line(content: &str) -> String {
     result
 }
 
-/// Compute SHA-256 of content for integrity verification.
-fn compute_integrity(content: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(content.as_bytes());
-    format!("{:x}", hash)
+/// Compute HMAC-SHA256 of content with key.
+fn compute_hmac(content: &str, key: &[u8]) -> String {
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(content.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
+}
+
+/// Load the audit key from .hive/audit.key.
+/// The key path is derived from the audit file path: .hive/tasks/<id>/audit.md -> .hive/audit.key
+fn load_audit_key(audit_path: &Path) -> Vec<u8> {
+    // audit_path is typically .hive/tasks/<id>/audit.md
+    // key is at .hive/audit.key (3 levels up from audit.md)
+    if let Some(tasks_dir) = audit_path.parent().and_then(|p| p.parent())
+        && let Some(hive_dir) = tasks_dir.parent() {
+            let key_path = hive_dir.join("audit.key");
+            if let Ok(key) = std::fs::read(&key_path) {
+                return key;
+            }
+        }
+    // Fallback: use a deterministic but weak key (for tests without full init)
+    b"hive-default-audit-key".to_vec()
 }
 
 fn should_log(entry_level: AuditLevel, config_level: AuditLevel) -> bool {
@@ -147,7 +168,8 @@ pub fn read_audit(audit_path: &Path) -> HiveResult<String> {
     Ok(std::fs::read_to_string(audit_path)?)
 }
 
-/// Verify audit file integrity. Returns Ok(true) if valid, Ok(false) if tampered.
+/// Verify audit file integrity using HMAC-SHA256.
+/// Returns Ok(true) if valid, Ok(false) if tampered or missing integrity line.
 pub fn verify_integrity(audit_path: &Path) -> HiveResult<bool> {
     if !audit_path.exists() {
         return Ok(true);
@@ -157,17 +179,18 @@ pub fn verify_integrity(audit_path: &Path) -> HiveResult<bool> {
         return Ok(true);
     }
 
-    // Extract the stored integrity hash
     let lines: Vec<&str> = content.lines().collect();
     let last = lines.last().copied().unwrap_or("");
+
+    // Non-empty audit WITHOUT integrity footer = anomaly (external write)
     if !last.starts_with("# integrity: ") {
-        // No integrity line — old format, can't verify
-        return Ok(true);
+        return Ok(false);
     }
 
     let stored_hash = last.strip_prefix("# integrity: ").unwrap_or("").trim();
     let body = strip_integrity_line(&content);
-    let expected_hash = compute_integrity(&body);
+    let key = load_audit_key(audit_path);
+    let expected_hash = compute_hmac(&body, &key);
 
     Ok(stored_hash == expected_hash)
 }
@@ -195,6 +218,7 @@ mod tests {
         let content = read_audit(&path).unwrap();
         assert!(content.contains("pending -> assigned"));
         assert!(content.contains("assigned -> in_progress"));
+        assert!(content.contains("# integrity:"));
     }
 
     #[test]
@@ -225,5 +249,37 @@ mod tests {
         let len2 = std::fs::read_to_string(&path).unwrap().len();
 
         assert!(len2 > len1, "audit file should grow, not be replaced");
+    }
+
+    #[test]
+    fn integrity_passes_for_untampered() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.md");
+        log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
+        assert!(verify_integrity(&path).unwrap());
+    }
+
+    #[test]
+    fn integrity_fails_for_tampered_content() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.md");
+        log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
+
+        // Tamper: rewrite content but keep integrity line
+        let content = std::fs::read_to_string(&path).unwrap();
+        let tampered = content.replace("a -> b", "TAMPERED");
+        std::fs::write(&path, tampered).unwrap();
+
+        assert!(!verify_integrity(&path).unwrap());
+    }
+
+    #[test]
+    fn integrity_fails_for_missing_footer() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("audit.md");
+
+        // Write audit without CLI path (simulating external write)
+        std::fs::write(&path, "# Audit Log\n\n- [2024-01-01] [state_change] fake\n").unwrap();
+        assert!(!verify_integrity(&path).unwrap());
     }
 }

@@ -505,3 +505,71 @@ fn doctor_detects_tampered_audit() {
         "tampered audit should be detected by doctor, got: {stdout2}"
     );
 }
+
+#[test]
+fn doctor_detects_missing_footer_audit() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "no-footer-task";
+
+    repo.write_task(task_id, "draft-nf", TaskState::InProgress, "");
+
+    // Write audit file directly (simulating external/worker write) — no integrity footer
+    let audit_path = repo.paths.audit_file(task_id);
+    std::fs::create_dir_all(audit_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &audit_path,
+        "# Audit Log\n\n- [2024-01-01 00:00:00 UTC] [state_change] fake entry\n",
+    )
+    .unwrap();
+
+    let output = repo.run_hive(&["doctor"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("invalid integrity hash") || stdout.contains("content was modified"),
+        "missing-footer audit should be flagged by doctor, got: {stdout}"
+    );
+}
+
+#[test]
+fn merge_all_non_direct_downstream_skipped() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+
+    let upstream = "up-merge-all";
+    let downstream = "down-merge-all";
+
+    // Create upstream completed task
+    repo.write_task(upstream, "draft-ma", TaskState::Completed, "");
+
+    // Create downstream that depends on upstream
+    let down_spec = format!(
+        "---\nid: {downstream}\ndraft_id: draft-ma\ndepends_on:\n  - {upstream}\ncomplexity: S\napproval_status: approved\nschema_version: 1\n---\n"
+    );
+    repo.write_task_with(downstream, "draft-ma", TaskState::Completed, &down_spec, true);
+
+    // Create task branches so merge can rebase them
+    git(&repo.root, &["branch", &format!("hive/{upstream}"), "HEAD"]);
+    git(&repo.root, &["branch", &format!("hive/{downstream}"), "HEAD"]);
+
+    // Run merge --all (default mode is "pr" with platform: none -> branch ready for review)
+    let output = repo.run_hive(&["merge", "--all"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stdout}{stderr}");
+
+    // Upstream should be "pending review / not yet on main" (not actually merged)
+    // Downstream should be skipped because upstream is not in merged set
+    assert!(
+        combined.contains("not yet merged") || combined.contains("dependencies not yet merged")
+            || combined.contains("pending review"),
+        "merge --all non-direct should skip downstream when upstream is only pending review, got: {combined}"
+    );
+
+    // Verify upstream is NOT marked as merged in state.json
+    let up_state = read_task_state(&repo.paths, upstream).unwrap();
+    assert!(
+        !up_state.merged,
+        "upstream should not be marked merged in non-direct mode"
+    );
+}
