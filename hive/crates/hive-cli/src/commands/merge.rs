@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Result, bail};
 use hive_core::config;
 use hive_core::lock::FileLock;
-use hive_core::state::{TaskState, TransitionAction};
+use hive_core::state::TaskState;
 use hive_core::storage::{self, HivePaths};
 use hive_git::{branch, merge, worktree};
 
@@ -59,17 +59,13 @@ fn merge_task(
     let task_branch = worktree::branch_name(task_id);
     let default = branch::default_branch(repo_root)?;
 
-    // Rebase onto main — conflict transitions task to blocked
+    // Rebase onto main — conflict directly marks task as blocked
     if branch::rebase(repo_root, &task_branch, &default).is_err() {
         eprintln!("task {task_id}: rebase conflict, marking as blocked");
         let _lock = FileLock::try_acquire(&paths.lock_file(task_id))?;
         let mut state = storage::read_task_state(paths, task_id)?;
-        state.state = state
-            .state
-            .transition(TransitionAction::Fail, state.retry_count, true)?;
-        state.state = state
-            .state
-            .transition(TransitionAction::Block, state.retry_count, true)?;
+        // Merge conflict is an external event; directly set blocked without going through failed
+        state.state = TaskState::Blocked;
         state.touch();
         storage::write_task_state(paths, &state)?;
         bail!("merge conflict in task {task_id}, task blocked for manual resolution");
@@ -151,14 +147,36 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
 
     let order = topological_sort(&deps);
     let task_ids: HashSet<String> = completed.iter().map(|s| s.task_id.clone()).collect();
+    let mut merged: HashSet<String> = HashSet::new();
 
     for task_id in &order {
         if !task_ids.contains(task_id) {
             continue;
         }
+        // Verify all dependencies have been successfully merged in this pass
+        if let Some(task_deps) = deps.get(task_id) {
+            let unmerged: Vec<_> = task_deps
+                .iter()
+                .filter(|d| task_ids.contains(*d) && !merged.contains(*d))
+                .collect();
+            if !unmerged.is_empty() {
+                eprintln!(
+                    "skipping {task_id}: dependencies not yet merged: {}",
+                    unmerged.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                );
+                continue;
+            }
+        }
         match merge_task(repo_root, paths, task_id, mode) {
-            Ok(()) => {}
-            Err(e) => eprintln!("failed to merge {task_id}: {e}"),
+            Ok(()) => {
+                merged.insert(task_id.clone());
+            }
+            Err(e) => {
+                // Stop downstream processing when upstream merge fails
+                eprintln!("failed to merge {task_id}: {e}");
+                eprintln!("stopping merge --all: upstream failure prevents downstream merges");
+                break;
+            }
         }
     }
 

@@ -165,14 +165,17 @@ fn generate_claude_adapter(repo_root: &Path) -> Result<()> {
     std::fs::create_dir_all(&plugin_dir)?;
 
     let plugin_json = plugin_dir.join("plugin.json");
-    if !plugin_json.exists() {
-        let content = serde_json::json!({
-            "name": "hive",
-            "description": "Hive multi-agent orchestration harness",
-            "version": "0.1.0"
-        });
-        std::fs::write(&plugin_json, serde_json::to_string_pretty(&content)?)?;
-    }
+    let content = serde_json::json!({
+        "name": "hive",
+        "description": "Hive multi-agent orchestration harness",
+        "version": "0.1.0",
+        "hooks": {
+            "pre-tool-use": "orchestrator-guard.sh"
+        },
+        "skills": ["humanize"]
+    });
+    // Always write to ensure hooks/skills are registered
+    std::fs::write(&plugin_json, serde_json::to_string_pretty(&content)?)?;
 
     let skills = [
         ("init", "Initialize hive project"),

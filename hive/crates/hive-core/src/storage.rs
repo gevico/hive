@@ -10,6 +10,7 @@ use crate::{HiveError, HiveResult};
 /// Per-task persistent state stored in .hive/tasks/<id>/state.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStateFile {
+    #[serde(default = "default_schema_version")]
     pub schema_version: u32,
     pub task_id: String,
     pub draft_id: String,
@@ -20,6 +21,11 @@ pub struct TaskStateFile {
     pub base_commit: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+fn default_schema_version() -> u32 {
+    eprintln!("warning: missing schema_version in state.json, defaulting to 1 (deprecated)");
+    1
 }
 
 impl TaskStateFile {

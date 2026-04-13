@@ -128,7 +128,7 @@ fn launch_task_inner(paths: &HivePaths, task_id: &str, acquire_lock: bool) -> Re
             let cmd = custom_command.as_deref().ok_or_else(|| {
                 anyhow::anyhow!("custom launch requires launch.custom_command in config")
             })?;
-            launch_custom(&wt_path, task_id, cmd)?;
+            launch_custom(&wt_path, task_id, cmd, &context)?;
         }
         _ => unreachable!("tool validity was checked before state transition"),
     }
@@ -166,7 +166,16 @@ fn launch_codex(worktree: &std::path::Path, task_id: &str, context: &str) -> Res
     ensure_result_file(worktree, task_id)
 }
 
-fn launch_custom(worktree: &std::path::Path, task_id: &str, cmd_template: &str) -> Result<()> {
+fn launch_custom(
+    worktree: &std::path::Path,
+    task_id: &str,
+    cmd_template: &str,
+    context: &str,
+) -> Result<()> {
+    // Write context to file so custom commands can read it
+    let context_path = worktree.join(".hive-context.md");
+    std::fs::write(&context_path, context)?;
+
     let cmd = cmd_template
         .replace("{task_id}", task_id)
         .replace("{worktree_path}", &worktree.to_string_lossy());

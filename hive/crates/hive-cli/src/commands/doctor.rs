@@ -121,26 +121,58 @@ pub fn run() -> Result<()> {
         }
     }
 
-    // Report state.md vs state.json authority
-    let state_md_path = paths.state_md();
-    if state_md_path.exists() {
-        println!("[ok] state.md exists (derived view; state.json is authoritative)");
-    }
+    // state.md vs state.json divergence is checked below in audit section
 
     // Check audit append-only integrity
     for s in &states {
         let audit_path = paths.audit_file(&s.task_id);
         if audit_path.exists()
-            && let Ok(content) = std::fs::read_to_string(&audit_path) {
-                // Verify it starts with "# Audit Log" header (CLI-written)
-                if !content.starts_with("# Audit Log") && !content.is_empty() {
-                    println!(
-                        "[warn] audit file for {} may have been modified externally (missing header)",
-                        s.task_id
-                    );
-                    warnings += 1;
-                }
+            && let Ok(content) = std::fs::read_to_string(&audit_path)
+        {
+            if content.is_empty() {
+                continue;
             }
+            // Check CLI-written header
+            if !content.starts_with("# Audit Log") {
+                println!(
+                    "[warn] audit file for {} may have been modified externally (missing header)",
+                    s.task_id
+                );
+                warnings += 1;
+            }
+            // Check monotonic timestamps (append-only invariant)
+            let mut prev_ts = String::new();
+            for line in content.lines() {
+                if let Some(ts_start) = line.find('[')
+                    && let Some(ts_end) = line[ts_start + 1..].find(']') {
+                        let ts = &line[ts_start + 1..ts_start + 1 + ts_end];
+                        if !prev_ts.is_empty() && ts < prev_ts.as_str() {
+                            println!(
+                                "[warn] audit file for {} has non-monotonic timestamps (possible tampering)",
+                                s.task_id
+                            );
+                            warnings += 1;
+                            break;
+                        }
+                        prev_ts = ts.to_string();
+                    }
+            }
+        }
+    }
+
+    // Check state.md vs state.json divergence
+    let state_md_path = paths.state_md();
+    if state_md_path.exists() {
+        // Regenerate expected content and compare
+        let expected = build_expected_state_md(&states);
+        if let Ok(actual) = std::fs::read_to_string(&state_md_path) {
+            if actual.trim() != expected.trim() {
+                println!("[warn] state.md diverges from state.json (state.json is authoritative)");
+                warnings += 1;
+            } else {
+                println!("[ok] state.md consistent with state.json");
+            }
+        }
     }
 
     // Check for orphaned worktrees
@@ -169,4 +201,22 @@ pub fn run() -> Result<()> {
         println!("health check: all clear");
         std::process::exit(EXIT_HEALTHY);
     }
+}
+
+fn build_expected_state_md(states: &[storage::TaskStateFile]) -> String {
+    let mut md = String::from("# Hive Task Status\n\n");
+    md.push_str("| Task ID | Draft | State | Retries | Approval | Updated |\n");
+    md.push_str("|---------|-------|-------|---------|----------|---------|\n");
+    for s in states {
+        md.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            s.task_id,
+            s.draft_id,
+            s.state,
+            s.retry_count,
+            s.approval_status,
+            s.updated_at.format("%Y-%m-%d %H:%M"),
+        ));
+    }
+    md
 }

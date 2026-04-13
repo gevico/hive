@@ -49,8 +49,16 @@ pub fn discover_skills(
         }
 
         // Try repo first, then user, then system
+        let system_skills = Path::new("/usr/share/hive/skills");
         let skill = try_load_skill(repo_skills, name)
-            .or_else(|| user_skills.and_then(|p| try_load_skill(p, name)));
+            .or_else(|| user_skills.and_then(|p| try_load_skill(p, name)))
+            .or_else(|| {
+                if system_skills.exists() {
+                    try_load_skill(system_skills, name)
+                } else {
+                    None
+                }
+            });
 
         if let Some(skill) = skill {
             seen.insert(name.clone());
@@ -76,6 +84,12 @@ fn try_load_skill(base: &Path, name: &str) -> Option<SkillInfo> {
 
     let skill_name = fm.get_str("name")?.to_string();
     let description = fm.get_str("description")?.to_string();
+
+    // Validate name is required and matches directory
+    if !is_valid_skill_name(&skill_name) {
+        eprintln!("warning: skill '{skill_name}' has invalid name characters, skipping");
+        return None;
+    }
 
     // Validate constraints
     if description.len() > 500 {

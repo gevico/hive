@@ -58,6 +58,7 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
     }
 
     let mut all_pass = true;
+    let mut results_log = String::from("# Verification Results\n\n");
     for criterion in &criteria {
         let result = match criterion {
             Criterion::Command(cmd) => verify_command(&wt_path, cmd),
@@ -66,16 +67,27 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
         };
 
         match result {
-            Ok(true) => println!("  PASS: {criterion}"),
+            Ok(true) => {
+                println!("  PASS: {criterion}");
+                results_log.push_str(&format!("- PASS: {criterion}\n"));
+            }
             Ok(false) => {
                 println!("  FAIL: {criterion}");
+                results_log.push_str(&format!("- FAIL: {criterion}\n"));
                 all_pass = false;
             }
             Err(e) => {
                 println!("  FAIL: {criterion} ({e})");
+                results_log.push_str(&format!("- FAIL: {criterion} ({e})\n"));
                 all_pass = false;
             }
         }
+    }
+
+    // Record results to task directory
+    let task_dir = paths.task_dir(task_id);
+    if task_dir.exists() {
+        let _ = std::fs::write(task_dir.join("check-results.md"), &results_log);
     }
 
     if all_pass {
