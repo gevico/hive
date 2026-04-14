@@ -158,6 +158,11 @@ fn execute_task(
                     continue;
                 }
                 check::EXIT_WRONG_STATE => return Ok(TaskExecutionResult::Deferred),
+                check::EXIT_AUDIT_FAIL => {
+                    return Err(anyhow!(
+                        "audit infrastructure failure for task {task_id}; fix audit configuration and retry"
+                    ));
+                }
                 code => return Err(anyhow!("unexpected hive check exit code {code}")),
             },
             TaskState::Completed => return Ok(TaskExecutionResult::Completed),
