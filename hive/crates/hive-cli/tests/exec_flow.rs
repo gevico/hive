@@ -673,7 +673,7 @@ fn exec_fails_when_audit_key_missing() {
 }
 
 #[test]
-fn exec_moves_review_task_out_of_review_when_check_audit_write_fails() {
+fn exec_keeps_review_task_in_review_when_check_audit_write_fails() {
     let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: full\nskills:\n  default: []\n";
     let repo = TestRepo::new(config);
     let task_id = "review-nokey";
@@ -697,8 +697,8 @@ fn exec_moves_review_task_out_of_review_when_check_audit_write_fails() {
     let state = read_task_state(&repo.paths, task_id).unwrap();
     assert_eq!(
         state.state,
-        TaskState::Failed,
-        "review task must not remain stuck in review after check audit failure"
+        TaskState::Review,
+        "review task must remain in review after check infrastructure failure"
     );
-    assert_eq!(state.retry_count, 1);
+    assert_eq!(state.retry_count, 0);
 }
