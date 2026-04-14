@@ -3,12 +3,11 @@ use std::process::Command;
 use anyhow::{Result, bail};
 use hive_core::storage::{self, HivePaths};
 
-// Exit codes: 0-3 per AC-10, 4 for audit infrastructure failure
+// Exit codes per AC-10 (0/1/2/3 only)
 pub(crate) const EXIT_ALL_PASS: i32 = 0;
 pub(crate) const EXIT_SOME_FAIL: i32 = 1;
 pub(crate) const EXIT_SPEC_NOT_FOUND: i32 = 2;
 pub(crate) const EXIT_WRONG_STATE: i32 = 3;
-pub(crate) const EXIT_AUDIT_FAIL: i32 = 4;
 
 pub fn run(task_id: String) -> Result<()> {
     let cwd = std::env::current_dir()?;
@@ -97,18 +96,15 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
         let _ = std::fs::write(task_dir.join("check-results.md"), &results_log);
     }
 
-    // Log check outcome — audit failure gets its own exit code (4)
+    // Log check outcome — audit failure propagates as normal command error
     if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
         let outcome = if all_pass { "all pass" } else { "some fail" };
-        if let Err(e) = hive_audit::log_decision(
+        hive_audit::log_decision(
             &paths.audit_file(task_id),
             config.audit_level,
             task_id,
             &format!("check outcome: {outcome}"),
-        ) {
-            eprintln!("error: audit write failed: {e}");
-            return Ok(EXIT_AUDIT_FAIL);
-        }
+        )?;
     }
 
     if all_pass {
