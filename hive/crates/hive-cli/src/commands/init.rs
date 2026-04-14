@@ -35,8 +35,7 @@ pub fn run() -> Result<()> {
 
     // Generate audit key at ~/.config/hive/audit.key (outside repo tree)
     // Workers in worktrees cannot access this key, making HMAC CLI-exclusive
-    hive_audit::ensure_audit_key()
-        .with_context(|| "failed to generate audit key")?;
+    hive_audit::ensure_audit_key().with_context(|| "failed to generate audit key")?;
     if let Ok(kp) = hive_audit::audit_key_path() {
         println!("audit key at {}", kp.display());
     }

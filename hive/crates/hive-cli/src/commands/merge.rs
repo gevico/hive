@@ -56,9 +56,7 @@ fn merge_task(
                 );
             }
             if !dep_state.merged {
-                bail!(
-                    "cannot merge {task_id}: dependency {dep} is completed but not yet merged"
-                );
+                bail!("cannot merge {task_id}: dependency {dep} is completed but not yet merged");
             }
         }
     }
@@ -179,7 +177,11 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
             if !unmerged.is_empty() {
                 eprintln!(
                     "skipping {task_id}: dependencies not yet merged: {}",
-                    unmerged.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                    unmerged
+                        .iter()
+                        .map(|s| s.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 );
                 continue;
             }
@@ -191,9 +193,7 @@ fn merge_all(repo_root: &std::path::Path, paths: &HivePaths, mode: &str) -> Resu
             }
             Ok(false) => {
                 // PR created or branch ready — NOT merged yet
-                eprintln!(
-                    "task {task_id}: pending review (not yet on main), downstream blocked"
-                );
+                eprintln!("task {task_id}: pending review (not yet on main), downstream blocked");
                 // Don't add to merged set; don't stop — just skip this one
             }
             Err(e) => {

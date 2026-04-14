@@ -671,3 +671,34 @@ fn exec_fails_when_audit_key_missing() {
         "error should mention audit key, got: {stderr}"
     );
 }
+
+#[test]
+fn exec_moves_review_task_out_of_review_when_check_audit_write_fails() {
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: full\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "review-nokey";
+
+    repo.write_task(
+        task_id,
+        "draft-review-nokey",
+        TaskState::Review,
+        "verify-command: true",
+    );
+    std::fs::create_dir_all(repo.paths.worktree_path(task_id)).unwrap();
+
+    let output = repo.run_hive_no_key(&["exec"]);
+    assert!(
+        !output.status.success(),
+        "exec should still surface the audit error, got exit {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let state = read_task_state(&repo.paths, task_id).unwrap();
+    assert_eq!(
+        state.state,
+        TaskState::Failed,
+        "review task must not remain stuck in review after check audit failure"
+    );
+    assert_eq!(state.retry_count, 1);
+}

@@ -97,14 +97,15 @@ pub fn run() -> Result<()> {
                             .ok()
                             .and_then(|t| std::time::SystemTime::now().duration_since(t).ok());
                         if let Some(age) = age
-                            && age > stale_threshold {
-                                println!(
-                                    "[warn] stale lock: {} (pid {pid} dead, age {:.0}s > 300s)",
-                                    lock_path.display(),
-                                    age.as_secs_f64()
-                                );
-                                warnings += 1;
-                            }
+                            && age > stale_threshold
+                        {
+                            println!(
+                                "[warn] stale lock: {} (pid {pid} dead, age {:.0}s > 300s)",
+                                lock_path.display(),
+                                age.as_secs_f64()
+                            );
+                            warnings += 1;
+                        }
                     }
                 }
             }
@@ -121,7 +122,10 @@ pub fn run() -> Result<()> {
             if entry.file_type()?.is_dir() {
                 let state_json = entry.path().join("state.json");
                 if state_json.exists() {
-                    match storage::read_task_state(&paths, entry.file_name().to_str().unwrap_or("?")) {
+                    match storage::read_task_state(
+                        &paths,
+                        entry.file_name().to_str().unwrap_or("?"),
+                    ) {
                         Ok(s) => states.push(s),
                         Err(e) => {
                             println!(

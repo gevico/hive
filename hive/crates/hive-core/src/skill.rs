@@ -89,10 +89,7 @@ fn try_load_skill(base: &Path, name: &str) -> Option<SkillInfo> {
     }
 
     // Warn about unknown fields
-    frontmatter::warn_unknown_fields(
-        &fm,
-        &["name", "description", "schema_version"],
-    );
+    frontmatter::warn_unknown_fields(&fm, &["name", "description", "schema_version"]);
 
     let skill_name = fm.get_str("name")?.to_string();
     let description = fm.get_str("description")?.to_string();

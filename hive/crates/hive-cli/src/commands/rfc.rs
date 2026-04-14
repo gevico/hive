@@ -150,34 +150,32 @@ pub fn run(draft_id: String) -> Result<()> {
     let platform = merge::Platform::parse(&hive_config.rfc.platform);
 
     match platform {
-        merge::Platform::Github => {
-            match merge::check_tool_available("gh") {
-                Ok(()) => {
-                    let _ = std::process::Command::new("git")
-                        .args(["push", "-u", "origin", &rfc_branch])
-                        .current_dir(&cwd)
-                        .output();
+        merge::Platform::Github => match merge::check_tool_available("gh") {
+            Ok(()) => {
+                let _ = std::process::Command::new("git")
+                    .args(["push", "-u", "origin", &rfc_branch])
+                    .current_dir(&cwd)
+                    .output();
 
-                    let url = merge::create_pr(
-                        &cwd,
-                        &platform,
-                        &rfc_branch,
-                        &format!("RFC: {draft_id}"),
-                        &rfc_content,
-                        &["rfc"],
-                    )?;
-                    if let Some(url) = url {
-                        println!("RFC PR created: {url}");
-                    }
-                }
-                Err(_) => {
-                    bail!(
-                        "rfc.platform is 'github' but 'gh' CLI not found. \
-                         Set platform: none in config.yml to skip PR creation"
-                    );
+                let url = merge::create_pr(
+                    &cwd,
+                    &platform,
+                    &rfc_branch,
+                    &format!("RFC: {draft_id}"),
+                    &rfc_content,
+                    &["rfc"],
+                )?;
+                if let Some(url) = url {
+                    println!("RFC PR created: {url}");
                 }
             }
-        }
+            Err(_) => {
+                bail!(
+                    "rfc.platform is 'github' but 'gh' CLI not found. \
+                         Set platform: none in config.yml to skip PR creation"
+                );
+            }
+        },
         _ => {
             println!("RFC committed to branch {rfc_branch}");
         }

@@ -63,9 +63,7 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
         // Each verifier returns (passed, optional_detail)
         let result: Result<(bool, Option<String>)> = match criterion {
             Criterion::Command(cmd) => verify_command(&wt_path, cmd),
-            Criterion::File { path, pattern } => {
-                verify_file(&wt_path, path, pattern.as_deref())
-            }
+            Criterion::File { path, pattern } => verify_file(&wt_path, path, pattern.as_deref()),
             Criterion::Manual(desc) => verify_manual(desc),
         };
 
@@ -173,7 +171,10 @@ fn verify_command(worktree: &std::path::Path, cmd: &str) -> Result<(bool, Option
         Ok((true, None))
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        Ok((false, Some(format!("exit {}, stderr: {stderr}", output.status))))
+        Ok((
+            false,
+            Some(format!("exit {}, stderr: {stderr}", output.status)),
+        ))
     }
 }
 
@@ -192,7 +193,10 @@ fn verify_file(
         if content.contains(pattern) {
             Ok((true, None))
         } else {
-            Ok((false, Some(format!("pattern '{pattern}' not found in {path}"))))
+            Ok((
+                false,
+                Some(format!("pattern '{pattern}' not found in {path}")),
+            ))
         }
     } else {
         Ok((true, None))

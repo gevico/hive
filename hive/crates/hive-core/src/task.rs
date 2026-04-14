@@ -157,7 +157,9 @@ pub fn parse_spec(content: &str) -> HiveResult<Spec> {
 
     let depends_on = fm.optional_string_list("depends_on")?.unwrap_or_default();
     let skills = fm.optional_string_list("skills")?.unwrap_or_default();
-    let exclude_skills = fm.optional_string_list("exclude_skills")?.unwrap_or_default();
+    let exclude_skills = fm
+        .optional_string_list("exclude_skills")?
+        .unwrap_or_default();
 
     // Validate rlcr_max_rounds: typed accessor rejects wrong types
     if let Some(max_rounds) = fm.typed_u32("rlcr_max_rounds")? {

@@ -144,22 +144,36 @@ fn execute_task(
                     continue;
                 }
             },
-            TaskState::Review => match check::check_task(paths, task_id)? {
-                check::EXIT_ALL_PASS => {
-                    complete_task(paths, task_id)?;
-                    return Ok(TaskExecutionResult::Completed);
+            TaskState::Review => {
+                let check_outcome = match check::check_task(paths, task_id) {
+                    Ok(code) => code,
+                    Err(err) => {
+                        handle_task_failure(repo_root, paths, task_id, &err.to_string())?;
+                        continue;
+                    }
+                };
+                match check_outcome {
+                    check::EXIT_ALL_PASS => {
+                        complete_task(paths, task_id)?;
+                        return Ok(TaskExecutionResult::Completed);
+                    }
+                    check::EXIT_SOME_FAIL => {
+                        handle_task_failure(
+                            repo_root,
+                            paths,
+                            task_id,
+                            "acceptance criteria failed",
+                        )?;
+                        continue;
+                    }
+                    check::EXIT_SPEC_NOT_FOUND => {
+                        handle_task_failure(repo_root, paths, task_id, "spec not found")?;
+                        continue;
+                    }
+                    check::EXIT_WRONG_STATE => return Ok(TaskExecutionResult::Deferred),
+                    code => return Err(anyhow!("unexpected hive check exit code {code}")),
                 }
-                check::EXIT_SOME_FAIL => {
-                    handle_task_failure(repo_root, paths, task_id, "acceptance criteria failed")?;
-                    continue;
-                }
-                check::EXIT_SPEC_NOT_FOUND => {
-                    handle_task_failure(repo_root, paths, task_id, "spec not found")?;
-                    continue;
-                }
-                check::EXIT_WRONG_STATE => return Ok(TaskExecutionResult::Deferred),
-                code => return Err(anyhow!("unexpected hive check exit code {code}")),
-            },
+            }
             TaskState::Completed => return Ok(TaskExecutionResult::Completed),
             TaskState::Failed => {
                 handle_task_failure(repo_root, paths, task_id, "resuming from failed state")?;

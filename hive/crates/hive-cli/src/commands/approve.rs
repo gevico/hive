@@ -46,9 +46,7 @@ pub fn run(draft_id: String) -> Result<()> {
 
     // GitHub advisory check
     let hive_config = config::load_config(&paths.hive_dir())?;
-    if hive_config.rfc.platform == "github"
-        && merge::check_tool_available("gh").is_ok()
-    {
+    if hive_config.rfc.platform == "github" && merge::check_tool_available("gh").is_ok() {
         let rfc_branch = format!("hive/rfc/{draft_id}");
         let output = std::process::Command::new("gh")
             .args(["pr", "view", &rfc_branch, "--json", "state", "-q", ".state"])
@@ -58,9 +56,7 @@ pub fn run(draft_id: String) -> Result<()> {
         {
             let state = String::from_utf8_lossy(&o.stdout).trim().to_string();
             if state != "MERGED" {
-                eprintln!(
-                    "advisory: RFC PR for {draft_id} is in state '{state}', not merged"
-                );
+                eprintln!("advisory: RFC PR for {draft_id} is in state '{state}', not merged");
             }
         }
     }

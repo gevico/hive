@@ -159,7 +159,10 @@ fn schema_version_string_type_rejected() {
     // schema_version: "1" (string) must be rejected, not defaulted
     let content = "---\nid: t\ndraft_id: d\ncomplexity: S\nschema_version: \"1\"\n---\n";
     let result = task::parse_spec(content);
-    assert!(result.is_err(), "string-typed schema_version should be rejected");
+    assert!(
+        result.is_err(),
+        "string-typed schema_version should be rejected"
+    );
 }
 
 #[test]
@@ -167,7 +170,10 @@ fn rlcr_max_rounds_string_type_rejected() {
     let content =
         "---\nid: t\ndraft_id: d\ncomplexity: S\nschema_version: 1\nrlcr_max_rounds: \"3\"\n---\n";
     let result = task::parse_spec(content);
-    assert!(result.is_err(), "string-typed rlcr_max_rounds should be rejected");
+    assert!(
+        result.is_err(),
+        "string-typed rlcr_max_rounds should be rejected"
+    );
 }
 
 #[test]

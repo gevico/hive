@@ -1,9 +1,9 @@
 use std::path::Path;
 
 use chrono::Utc;
-use hmac::{Hmac, Mac};
 use hive_core::HiveResult;
 use hive_core::config::AuditLevel;
+use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
