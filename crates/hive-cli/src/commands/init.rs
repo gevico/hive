@@ -229,11 +229,11 @@ fn generate_claude_adapter(_repo_root: &Path) -> Result<()> {
     // skills/
     let skills_dir = plugin_root.join("skills");
     for (name, desc, body) in HIVE_SKILLS {
-        let skill_dir = skills_dir.join(format!("hive-{name}"));
+        let skill_dir = skills_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
         std::fs::write(
             skill_dir.join("SKILL.md"),
-            format!("---\nname: hive:{name}\ndescription: \"{desc}\"\n---\n\n{body}\n"),
+            format!("---\nname: {name}\ndescription: \"{desc}\"\n---\n\n{body}\n"),
         )?;
     }
 
