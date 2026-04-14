@@ -226,14 +226,13 @@ fn generate_claude_adapter(_repo_root: &Path) -> Result<()> {
         }))?,
     )?;
 
-    // skills/
-    let skills_dir = plugin_root.join("skills");
+    // commands/ — user-invocable slash commands (/hive:init, /hive:exec, etc.)
+    let commands_dir = plugin_root.join("commands");
+    std::fs::create_dir_all(&commands_dir)?;
     for (name, desc, body) in HIVE_SKILLS {
-        let skill_dir = skills_dir.join(name);
-        std::fs::create_dir_all(&skill_dir)?;
         std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: \"{desc}\"\n---\n\n{body}\n"),
+            commands_dir.join(format!("{name}.md")),
+            format!("---\ndescription: \"{desc}\"\n---\n\n{body}\n"),
         )?;
     }
 
