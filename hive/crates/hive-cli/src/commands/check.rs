@@ -98,17 +98,15 @@ pub(crate) fn check_task(paths: &HivePaths, task_id: &str) -> Result<i32> {
         let _ = std::fs::write(task_dir.join("check-results.md"), &results_log);
     }
 
-    // Log check outcome — error propagated per AC-14
+    // Log check outcome — error propagated per audit contract
     if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
         let outcome = if all_pass { "all pass" } else { "some fail" };
-        if let Err(e) = hive_audit::log_decision(
+        hive_audit::log_decision(
             &paths.audit_file(task_id),
             config.audit_level,
             task_id,
             &format!("check outcome: {outcome}"),
-        ) {
-            eprintln!("warning: audit write failed: {e}");
-        }
+        )?;
     }
 
     if all_pass {

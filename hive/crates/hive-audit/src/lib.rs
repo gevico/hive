@@ -234,20 +234,28 @@ pub fn verify_integrity(audit_path: &Path) -> HiveResult<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::LazyLock;
     use tempfile::TempDir;
 
-    /// Ensure audit key exists at the standard location for tests.
-    /// Uses ensure_audit_key() which is idempotent — safe for parallel tests.
-    fn setup_test_key(_tmp: &TempDir) {
-        // Clear any test-specific override so we use the real config dir path
-        unsafe { std::env::remove_var("HIVE_AUDIT_KEY_PATH") };
-        ensure_audit_key().expect("test requires audit key at ~/.config/hive/audit.key");
+    /// Shared audit key for all unit tests. Lives for the entire test process,
+    /// so no test can observe a dangling key path. All tests set HIVE_AUDIT_KEY_PATH
+    /// to the same stable path, avoiding the race between per-test tempdirs.
+    static TEST_KEY_DIR: LazyLock<TempDir> = LazyLock::new(|| {
+        let dir = TempDir::new().unwrap();
+        let key_path = dir.path().join("audit.key");
+        std::fs::write(&key_path, b"test-key-material-32-bytes-long!").unwrap();
+        dir
+    });
+
+    fn setup_test_key() {
+        let key_path = TEST_KEY_DIR.path().join("audit.key");
+        unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", &key_path) };
     }
 
     #[test]
     fn append_and_read() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
-        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         log_state_change(&path, AuditLevel::Standard, "t-01", "pending", "assigned").unwrap();
@@ -268,8 +276,8 @@ mod tests {
 
     #[test]
     fn level_filtering() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
-        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         // Config at minimal — standard-level events should be skipped
@@ -285,8 +293,8 @@ mod tests {
 
     #[test]
     fn append_only() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
-        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
@@ -300,8 +308,8 @@ mod tests {
 
     #[test]
     fn integrity_passes_for_untampered() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
-        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
         assert!(verify_integrity(&path).unwrap());
@@ -309,8 +317,8 @@ mod tests {
 
     #[test]
     fn integrity_fails_for_tampered_content() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
-        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
 
@@ -324,6 +332,7 @@ mod tests {
 
     #[test]
     fn integrity_fails_for_missing_footer() {
+        setup_test_key();
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.md");
 

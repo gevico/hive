@@ -88,6 +88,16 @@ impl TestRepo {
             .output()
             .unwrap()
     }
+
+    /// Run hive with audit key pointing to a nonexistent path.
+    fn run_hive_no_key(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .current_dir(&self.root)
+            .env("HIVE_AUDIT_KEY_PATH", self.root.join("nonexistent-key"))
+            .output()
+            .unwrap()
+    }
 }
 
 fn git(repo: &Path, args: &[&str]) {
@@ -283,7 +293,7 @@ fn merge_rejects_dependency_completed_but_not_merged() {
 
     // Create dependency task in completed state but NOT merged
     repo.write_task(dep, "draft-merge", TaskState::Completed, "");
-    let mut dep_state = read_task_state(&repo.paths, dep).unwrap();
+    let dep_state = read_task_state(&repo.paths, dep).unwrap();
     assert!(!dep_state.merged); // Not yet merged
 
     // Create child task that depends on dep
@@ -598,5 +608,66 @@ fn merge_all_non_direct_downstream_skipped() {
         down_state.state,
         TaskState::Completed,
         "downstream state should remain completed (not blocked or failed)"
+    );
+}
+
+#[test]
+fn check_fails_when_audit_key_missing_and_full_level() {
+    // With audit_level: full, log_decision fires on check outcome.
+    // Missing key must cause check to fail (non-zero exit), not silently succeed.
+    let config = "launch:\n  tool: custom\n  custom_command: 'true'\nrfc:\n  platform: none\naudit_level: full\nskills:\n  default: []\n";
+    let repo = TestRepo::new(config);
+    let task_id = "check-nokey";
+
+    repo.write_task(
+        task_id,
+        "draft-nokey",
+        TaskState::Review,
+        "verify-command: true",
+    );
+    // Create worktree dir so command verifier can run
+    std::fs::create_dir_all(repo.paths.worktree_path(task_id)).unwrap();
+
+    let output = repo.run_hive_no_key(&["check", "--task", task_id]);
+    assert!(
+        !output.status.success(),
+        "check must fail when audit key is missing at full level, got exit {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("audit key not found"),
+        "error should mention audit key, got: {stderr}"
+    );
+}
+
+#[test]
+fn exec_fails_when_audit_key_missing() {
+    // exec calls log_state_change (minimal level) on claim.
+    // With standard config and missing key, exec must surface the audit error.
+    let task_id = "exec-nokey";
+    let config = format!(
+        "launch:\n  tool: custom\n  custom_command: |\n    cat > result.md <<'EOF'\n    ---\n    id: {task_id}\n    status: completed\n    branch: hive/{task_id}\n    commit: abcdef1\n    base_commit: 1234567\n    schema_version: 1\n    ---\n    ## Summary\n    done\n    EOF\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n"
+    );
+    let repo = TestRepo::new(&config);
+    repo.write_task(
+        task_id,
+        "draft-nokey2",
+        TaskState::Pending,
+        "verify-command: true",
+    );
+
+    let output = repo.run_hive_no_key(&["exec"]);
+    assert!(
+        !output.status.success(),
+        "exec must fail when audit key is missing, got exit {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("audit key not found"),
+        "error should mention audit key, got: {stderr}"
     );
 }
