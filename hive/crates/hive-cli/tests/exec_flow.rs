@@ -80,10 +80,14 @@ impl TestRepo {
         write_task_state(&self.paths, &task_state).unwrap();
     }
 
+    fn build_hive_cmd(&self, args: &[&str]) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hive"));
+        cmd.args(args).current_dir(&self.root);
+        cmd
+    }
+
     fn run_hive(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_hive"))
-            .args(args)
-            .current_dir(&self.root)
+        self.build_hive_cmd(args)
             .env("HIVE_AUDIT_KEY_PATH", &self.audit_key_path)
             .output()
             .unwrap()
@@ -91,9 +95,7 @@ impl TestRepo {
 
     /// Run hive with audit key pointing to a nonexistent path.
     fn run_hive_no_key(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_hive"))
-            .args(args)
-            .current_dir(&self.root)
+        self.build_hive_cmd(args)
             .env("HIVE_AUDIT_KEY_PATH", self.root.join("nonexistent-key"))
             .output()
             .unwrap()
@@ -111,6 +113,21 @@ fn git(repo: &Path, args: &[&str]) {
         "git {:?} failed: {}",
         args,
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// Assert that a hive subprocess failed due to missing audit key.
+fn assert_audit_key_error(output: &Output) {
+    assert!(
+        !output.status.success(),
+        "expected audit key error, got exit {:?}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("audit key not found"),
+        "error should mention audit key, got: {stderr}"
     );
 }
 
@@ -629,17 +646,7 @@ fn check_fails_when_audit_key_missing_and_full_level() {
     std::fs::create_dir_all(repo.paths.worktree_path(task_id)).unwrap();
 
     let output = repo.run_hive_no_key(&["check", "--task", task_id]);
-    assert!(
-        !output.status.success(),
-        "check must fail when audit key is missing at full level, got exit {:?}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("audit key not found"),
-        "error should mention audit key, got: {stderr}"
-    );
+    assert_audit_key_error(&output);
 }
 
 #[test]
@@ -647,10 +654,7 @@ fn exec_fails_when_audit_key_missing() {
     // exec calls log_state_change (minimal level) on claim.
     // With standard config and missing key, exec must surface the audit error.
     let task_id = "exec-nokey";
-    let config = format!(
-        "launch:\n  tool: custom\n  custom_command: |\n    cat > result.md <<'EOF'\n    ---\n    id: {task_id}\n    status: completed\n    branch: hive/{task_id}\n    commit: abcdef1\n    base_commit: 1234567\n    schema_version: 1\n    ---\n    ## Summary\n    done\n    EOF\nrfc:\n  platform: none\naudit_level: standard\nskills:\n  default: []\n"
-    );
-    let repo = TestRepo::new(&config);
+    let repo = TestRepo::new(&custom_launch_config(task_id));
     repo.write_task(
         task_id,
         "draft-nokey2",
@@ -659,17 +663,7 @@ fn exec_fails_when_audit_key_missing() {
     );
 
     let output = repo.run_hive_no_key(&["exec"]);
-    assert!(
-        !output.status.success(),
-        "exec must fail when audit key is missing, got exit {:?}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("audit key not found"),
-        "error should mention audit key, got: {stderr}"
-    );
+    assert_audit_key_error(&output);
 }
 
 #[test]
@@ -687,17 +681,7 @@ fn exec_keeps_review_task_in_review_when_check_audit_write_fails() {
     std::fs::create_dir_all(repo.paths.worktree_path(task_id)).unwrap();
 
     let output = repo.run_hive_no_key(&["exec"]);
-    assert!(
-        !output.status.success(),
-        "exec should surface audit error, got exit {:?}\nstderr: {}",
-        output.status.code(),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("audit key not found"),
-        "error should mention audit key, got: {stderr}"
-    );
+    assert_audit_key_error(&output);
 
     let state = read_task_state(&repo.paths, task_id).unwrap();
     assert_eq!(
