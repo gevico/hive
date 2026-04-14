@@ -179,29 +179,54 @@ const HIVE_SKILLS: &[(&str, &str, &str)] = &[
     ("graph", "Display task dependency graph", "Run `hive graph` to visualize the dependency relationships between all tasks."),
 ];
 
-fn claude_plugin_dir() -> Result<std::path::PathBuf> {
+fn claude_plugins_dir() -> Result<std::path::PathBuf> {
     let home = std::env::var("HOME").context("HOME not set")?;
-    Ok(std::path::PathBuf::from(home).join(".claude/plugins/cache/hive/hive/0.1.0"))
+    Ok(std::path::PathBuf::from(home).join(".claude/plugins"))
 }
 
 fn generate_claude_adapter(_repo_root: &Path) -> Result<()> {
-    let plugin_root = claude_plugin_dir()?;
-    std::fs::create_dir_all(&plugin_root)?;
+    let plugins_dir = claude_plugins_dir()?;
 
-    // .claude-plugin/plugin.json — metadata only
-    let plugin_meta_dir = plugin_root.join(".claude-plugin");
-    std::fs::create_dir_all(&plugin_meta_dir)?;
-    let plugin_json = serde_json::json!({
+    // Step 1: Create local marketplace at ~/.claude/plugins/marketplaces/hive/
+    let marketplace_dir = plugins_dir.join("marketplaces/hive");
+    std::fs::create_dir_all(&marketplace_dir)?;
+
+    let marketplace_meta = marketplace_dir.join(".claude-plugin");
+    std::fs::create_dir_all(&marketplace_meta)?;
+    let marketplace_json = serde_json::json!({
         "name": "hive",
-        "description": "Hive multi-agent orchestration harness",
-        "version": "0.1.0"
+        "owner": { "name": "hive" },
+        "plugins": [
+            {
+                "name": "hive",
+                "description": "Hive multi-agent orchestration harness",
+                "version": "0.1.0",
+                "source": "./plugins/hive"
+            }
+        ]
     });
     std::fs::write(
-        plugin_meta_dir.join("plugin.json"),
-        serde_json::to_string_pretty(&plugin_json)?,
+        marketplace_meta.join("marketplace.json"),
+        serde_json::to_string_pretty(&marketplace_json)?,
     )?;
 
-    // skills/ — one directory per command with SKILL.md
+    // Step 2: Write plugin files into marketplace
+    let plugin_root = marketplace_dir.join("plugins/hive");
+    std::fs::create_dir_all(&plugin_root)?;
+
+    // .claude-plugin/plugin.json
+    let plugin_meta = plugin_root.join(".claude-plugin");
+    std::fs::create_dir_all(&plugin_meta)?;
+    std::fs::write(
+        plugin_meta.join("plugin.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": "hive",
+            "description": "Hive multi-agent orchestration harness",
+            "version": "0.1.0"
+        }))?,
+    )?;
+
+    // skills/
     let skills_dir = plugin_root.join("skills");
     for (name, desc, body) in HIVE_SKILLS {
         let skill_dir = skills_dir.join(format!("hive-{name}"));
@@ -212,28 +237,26 @@ fn generate_claude_adapter(_repo_root: &Path) -> Result<()> {
         )?;
     }
 
-    // hooks/ — orchestrator guard
+    // hooks/
     let hooks_dir = plugin_root.join("hooks");
     std::fs::create_dir_all(&hooks_dir)?;
-
-    let hooks = serde_json::json!({
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "Write|Edit|NotebookEdit",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/orchestrator-guard.sh"
-                        }
-                    ]
-                }
-            ]
-        }
-    });
     std::fs::write(
         hooks_dir.join("hooks.json"),
-        serde_json::to_string_pretty(&hooks)?,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Write|Edit|NotebookEdit",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "${CLAUDE_PLUGIN_ROOT}/hooks/orchestrator-guard.sh"
+                            }
+                        ]
+                    }
+                ]
+            }
+        }))?,
     )?;
 
     let guard_script = hooks_dir.join("orchestrator-guard.sh");
@@ -253,34 +276,42 @@ fi
         std::fs::set_permissions(&guard_script, std::fs::Permissions::from_mode(0o755))?;
     }
 
-    // Enable in Claude Code settings
-    enable_claude_plugin()?;
+    // Step 3: Register marketplace (idempotent — skips if already registered)
+    let mp_output = std::process::Command::new("claude")
+        .args([
+            "plugin",
+            "marketplace",
+            "add",
+            &marketplace_dir.to_string_lossy(),
+        ])
+        .output();
+    if let Ok(out) = &mp_output {
+        if !out.status.success() {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if !combined.contains("already") {
+                eprintln!("warning: marketplace add: {combined}");
+            }
+        }
+    }
 
-    Ok(())
-}
-
-fn enable_claude_plugin() -> Result<()> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let settings_path = std::path::PathBuf::from(&home).join(".claude/settings.json");
-
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = std::fs::read_to_string(&settings_path)?;
-        serde_json::from_str(&content)?
-    } else {
-        serde_json::json!({})
-    };
-
-    let enabled = settings
-        .as_object_mut()
-        .context("settings.json is not an object")?
-        .entry("enabledPlugins")
-        .or_insert_with(|| serde_json::json!({}));
-
-    if let Some(obj) = enabled.as_object_mut() {
-        if !obj.contains_key("hive@hive") {
-            obj.insert("hive@hive".into(), serde_json::Value::Bool(true));
-            std::fs::write(&settings_path, serde_json::to_string_pretty(&settings)?)?;
-            println!("enabled hive plugin in Claude Code settings");
+    // Step 4: Install plugin (idempotent — skips if already installed)
+    let install_output = std::process::Command::new("claude")
+        .args(["plugin", "install", "hive@hive"])
+        .output();
+    if let Ok(out) = &install_output {
+        if !out.status.success() {
+            let combined = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if !combined.contains("already installed") {
+                eprintln!("warning: plugin install: {combined}");
+            }
         }
     }
 
