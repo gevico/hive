@@ -10,6 +10,7 @@ struct TestRepo {
     _tmp: TempDir,
     root: PathBuf,
     paths: HivePaths,
+    audit_key_path: PathBuf,
 }
 
 impl TestRepo {
@@ -17,10 +18,9 @@ impl TestRepo {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
 
-        // Isolated audit key for this test (hermetic, no real ~/.config pollution)
+        // Per-test isolated audit key (NOT set as process env var — passed only to subprocess)
         let key_path = tmp.path().join("test-audit.key");
         std::fs::write(&key_path, b"test-key-32-bytes-exactly-right!").unwrap();
-        unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", key_path.to_str().unwrap()) };
 
         git(&root, &["init", "-b", "main"]);
         git(&root, &["config", "user.name", "Test User"]);
@@ -44,6 +44,7 @@ impl TestRepo {
             _tmp: tmp,
             root,
             paths,
+            audit_key_path: key_path,
         }
     }
 
@@ -80,13 +81,12 @@ impl TestRepo {
     }
 
     fn run_hive(&self, args: &[&str]) -> Output {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hive"));
-        cmd.args(args).current_dir(&self.root);
-        // Pass isolated audit key path to subprocess
-        if let Ok(key_path) = std::env::var("HIVE_AUDIT_KEY_PATH") {
-            cmd.env("HIVE_AUDIT_KEY_PATH", key_path);
-        }
-        cmd.output().unwrap()
+        Command::new(env!("CARGO_BIN_EXE_hive"))
+            .args(args)
+            .current_dir(&self.root)
+            .env("HIVE_AUDIT_KEY_PATH", &self.audit_key_path)
+            .output()
+            .unwrap()
     }
 }
 
@@ -480,7 +480,9 @@ fn doctor_detects_tampered_audit() {
     // Create a task and write some audit entries via the CLI path
     repo.write_task(task_id, "draft-tamper", TaskState::InProgress, "");
 
-    // Write a legitimate audit entry
+    // Write a legitimate audit entry (set key path for in-process call, restore after)
+    let old_key = std::env::var("HIVE_AUDIT_KEY_PATH").ok();
+    unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", &repo.audit_key_path) };
     hive_audit::log_state_change(
         &repo.paths.audit_file(task_id),
         hive_core::config::AuditLevel::Standard,
@@ -489,6 +491,11 @@ fn doctor_detects_tampered_audit() {
         "assigned",
     )
     .unwrap();
+    // Restore
+    match old_key {
+        Some(v) => unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", v) },
+        None => unsafe { std::env::remove_var("HIVE_AUDIT_KEY_PATH") },
+    }
 
     // Verify doctor passes on untampered file
     let output1 = repo.run_hive(&["doctor"]);

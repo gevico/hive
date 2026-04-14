@@ -253,15 +253,15 @@ fn complete_task(paths: &HivePaths, task_id: &str) -> Result<()> {
     state.touch();
     storage::write_task_state(paths, &state)?;
     runtime::log_state_change(paths, task_id, &from_state, &state.state.to_string())?;
-    // Log standard-level round summary for the completion event
+    // Log standard-level round summary — error propagated per AC-14
     if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
-        let _ = hive_audit::log_round_summary(
+        hive_audit::log_round_summary(
             &paths.audit_file(task_id),
             config.audit_level,
             task_id,
             0,
             "task completed after check verification passed",
-        );
+        )?;
     }
     Ok(())
 }

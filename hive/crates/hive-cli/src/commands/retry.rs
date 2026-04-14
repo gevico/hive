@@ -38,16 +38,15 @@ pub fn run(task_id: String) -> Result<()> {
     state.touch();
     storage::write_task_state(&paths, &state)?;
 
-    // Log audit
-    if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
-        let _ = hive_audit::log_state_change(
-            &paths.audit_file(&task_id),
-            config.audit_level,
-            &task_id,
-            "failed",
-            "pending",
-        );
-    }
+    // Log audit — error propagated per AC-14 contract
+    let config = hive_core::config::load_config(&paths.hive_dir())?;
+    hive_audit::log_state_change(
+        &paths.audit_file(&task_id),
+        config.audit_level,
+        &task_id,
+        "failed",
+        "pending",
+    )?;
 
     println!(
         "task {task_id}: retrying ({}/{})",

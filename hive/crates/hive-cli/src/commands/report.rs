@@ -120,9 +120,9 @@ fn report_task_inner(
     runtime::log_state_change(paths, task_id, &previous_state, &state.state.to_string())
         .map_err(|e| CommandFailure::new(EXIT_RESULT_INVALID, e.to_string()))?;
 
-    // Log structured result outcome at standard audit level
+    // Log structured result outcome — error propagated per AC-14
     if let Ok(config) = hive_core::config::load_config(&paths.hive_dir()) {
-        let _ = hive_audit::log_round_summary(
+        hive_audit::log_round_summary(
             &paths.audit_file(task_id),
             config.audit_level,
             task_id,
@@ -131,7 +131,8 @@ fn report_task_inner(
                 "report outcome: {} (branch: {}, commit: {})",
                 result.status, result.branch, result.commit
             ),
-        );
+        )
+        .map_err(|e| CommandFailure::new(EXIT_RESULT_INVALID, format!("audit error: {e}")))?;
     }
 
     let outcome = match result.status {

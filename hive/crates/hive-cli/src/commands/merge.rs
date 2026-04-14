@@ -123,15 +123,14 @@ fn merge_task(
         state.touch();
         storage::write_task_state(paths, &state)?;
 
-        // Log audit AFTER confirmed merge success
-        if let Ok(cfg) = config::load_config(&paths.hive_dir()) {
-            let _ = hive_audit::log_merge(
-                &paths.audit_file(task_id),
-                cfg.audit_level,
-                task_id,
-                &format!("merged via {mode} to {default}"),
-            );
-        }
+        // Log audit AFTER confirmed merge success — error propagated per AC-14
+        let cfg = config::load_config(&paths.hive_dir())?;
+        hive_audit::log_merge(
+            &paths.audit_file(task_id),
+            cfg.audit_level,
+            task_id,
+            &format!("merged via {mode} to {default}"),
+        )?;
     }
 
     Ok(actually_merged)

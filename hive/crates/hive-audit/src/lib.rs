@@ -236,11 +236,12 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// Create an isolated audit key for this test via HIVE_AUDIT_KEY_PATH env var.
-    fn setup_test_key(tmp: &TempDir) {
-        let key_path = tmp.path().join("audit.key");
-        std::fs::write(&key_path, b"test-key-32-bytes-exactly-right!").unwrap();
-        unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", key_path.to_str().unwrap()) };
+    /// Ensure audit key exists at the standard location for tests.
+    /// Uses ensure_audit_key() which is idempotent — safe for parallel tests.
+    fn setup_test_key(_tmp: &TempDir) {
+        // Clear any test-specific override so we use the real config dir path
+        unsafe { std::env::remove_var("HIVE_AUDIT_KEY_PATH") };
+        ensure_audit_key().expect("test requires audit key at ~/.config/hive/audit.key");
     }
 
     #[test]
