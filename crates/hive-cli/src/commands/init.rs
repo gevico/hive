@@ -142,7 +142,7 @@ fn detect_and_generate_adapters(repo_root: &Path, paths: &HivePaths) -> Result<(
 
     if has_claude {
         generate_claude_adapter(repo_root)?;
-        println!("detected claude CLI -- generated Claude Code plugin adapter");
+        println!("detected claude CLI -- generated Claude Code plugin");
     }
 
     if has_codex {
@@ -150,12 +150,12 @@ fn detect_and_generate_adapters(repo_root: &Path, paths: &HivePaths) -> Result<(
         println!("detected codex CLI -- generated Codex adapter");
     }
 
-    if !has_claude && !has_codex {
-        generate_generic_adapter(paths)?;
-        eprintln!("warning: neither claude nor codex CLI detected, using generic fallback");
-    }
+    // Always generate generic adapter (AGENTS.md) for opencode and other tools
+    generate_generic_adapter(repo_root, paths)?;
 
-    install_humanize_plugin(repo_root, paths, has_claude, has_codex)?;
+    if !has_claude && !has_codex {
+        eprintln!("warning: neither claude nor codex CLI detected; generic adapter generated");
+    }
 
     Ok(())
 }
@@ -167,68 +167,86 @@ fn which_exists(cmd: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+const HIVE_SKILLS: &[(&str, &str, &str)] = &[
+    ("init", "Initialize hive project in the current git repository", "Run `hive init` to create the `.hive/` directory structure, generate config files, detect agent CLIs, and install default plugins.\n\nRequires: current directory must be a git repository."),
+    ("exec", "Orchestrate full execution chain for approved tasks", "Run `hive exec` to process all approved tasks through the full pipeline:\nclaim → isolate → launch → check → report\n\nRespects dependency order and retries failed tasks up to the configured limit."),
+    ("status", "Show task status overview", "Run `hive status` to display a table of all tasks with their current state, approval status, and dependencies."),
+    ("merge", "Merge completed task branches via rebase + PR", "Usage:\n- `hive merge --task <id>` — rebase task branch onto main, create PR\n- `hive merge --all` — merge all completed tasks in dependency order\n- `hive merge --task <id> --mode direct` — merge directly without PR"),
+    ("rfc", "Generate RFC document for team review", "Run `hive rfc --draft <draft_id>` to aggregate all specs and plans for a draft into a single RFC document at `.hive/rfcs/<draft_id>.md`."),
+    ("approve", "Approve a draft for execution after team review", "Run `hive approve --draft <draft_id>` to transition all specs under the draft to approved status, enabling `hive exec` to schedule them."),
+    ("check", "Verify acceptance criteria for a task in review state", "Run `hive check --task <id>` to run all verifiers (command, file, manual) defined in the task spec.\n\nExit codes: 0=all pass, 1=some fail, 2=spec not found, 3=wrong state."),
+    ("doctor", "Diagnose environment and project health", "Run `hive doctor` to validate git setup, agent tool availability, config syntax, state consistency, stale locks, worktree health, and audit integrity.\n\nExit codes: 0=healthy, 1=warnings, 2=errors."),
+    ("graph", "Display task dependency graph", "Run `hive graph` to visualize the dependency relationships between all tasks."),
+];
+
 fn generate_claude_adapter(repo_root: &Path) -> Result<()> {
+    // .claude-plugin/plugin.json — metadata only
     let plugin_dir = repo_root.join(".claude-plugin");
     std::fs::create_dir_all(&plugin_dir)?;
-
-    let plugin_json = plugin_dir.join("plugin.json");
-    let content = serde_json::json!({
+    let plugin_json = serde_json::json!({
         "name": "hive",
         "description": "Hive multi-agent orchestration harness",
-        "version": "0.1.0",
-        "hooks": {
-            "pre-tool-use": "orchestrator-guard.sh"
-        },
-        "skills": ["humanize"]
+        "version": "0.1.0"
     });
-    // Always write to ensure hooks/skills are registered
-    std::fs::write(&plugin_json, serde_json::to_string_pretty(&content)?)?;
+    std::fs::write(
+        plugin_dir.join("plugin.json"),
+        serde_json::to_string_pretty(&plugin_json)?,
+    )?;
 
-    let skills = [
-        ("init", "Initialize hive project"),
-        ("exec", "Execute approved tasks"),
-        ("status", "Show task status"),
-        ("merge", "Merge completed tasks"),
-        ("audit", "Query audit log"),
-        ("skill", "Manage skills"),
-        ("doctor", "Diagnose project health"),
-        ("graph", "Display dependency graph"),
-        ("rfc", "Generate RFC document"),
-    ];
+    // skills/ — one directory per command with SKILL.md
+    let skills_dir = repo_root.join("skills");
+    for (name, desc, body) in HIVE_SKILLS {
+        let skill_dir = skills_dir.join(format!("hive-{name}"));
+        std::fs::create_dir_all(&skill_dir)?;
+        let skill_path = skill_dir.join("SKILL.md");
+        if !skill_path.exists() {
+            std::fs::write(
+                &skill_path,
+                format!("---\nname: hive:{name}\ndescription: \"{desc}\"\n---\n\n{body}\n"),
+            )?;
+        }
+    }
 
-    // Generate orchestrator guard hook
-    let guard_hook = plugin_dir.join("orchestrator-guard.sh");
-    if !guard_hook.exists() {
+    // hooks/ — orchestrator guard
+    let hooks_dir = repo_root.join("hooks");
+    std::fs::create_dir_all(&hooks_dir)?;
+
+    let hooks_json_path = hooks_dir.join("hooks.json");
+    if !hooks_json_path.exists() {
+        let hooks = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Write|Edit|NotebookEdit",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "${CLAUDE_PLUGIN_ROOT}/hooks/orchestrator-guard.sh"
+                            }
+                        ]
+                    }
+                ]
+            }
+        });
+        std::fs::write(&hooks_json_path, serde_json::to_string_pretty(&hooks)?)?;
+    }
+
+    let guard_script = hooks_dir.join("orchestrator-guard.sh");
+    if !guard_script.exists() {
         std::fs::write(
-            &guard_hook,
-            "#!/usr/bin/env bash\n\
-             # Orchestrator guard hook: blocks Write/Edit/NotebookEdit when HIVE_ROLE=orchestrator\n\
-             if [ \"$HIVE_ROLE\" = \"orchestrator\" ]; then\n\
-             \tTOOL=\"$1\"\n\
-             \tcase \"$TOOL\" in\n\
-             \t\tWrite|Edit|NotebookEdit)\n\
-             \t\t\techo \"BLOCKED: orchestrator must not write files directly\" >&2\n\
-             \t\t\texit 2\n\
-             \t\t\t;;\n\
-             \tesac\n\
-             fi\n",
+            &guard_script,
+            r#"#!/usr/bin/env bash
+# Orchestrator guard: blocks write tools when HIVE_ROLE=orchestrator
+if [ "$HIVE_ROLE" = "orchestrator" ]; then
+    echo "BLOCKED: orchestrator role must not write files directly" >&2
+    exit 2
+fi
+"#,
         )?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&guard_hook, std::fs::Permissions::from_mode(0o755))?;
-        }
-    }
-
-    for (name, desc) in skills {
-        let skill_path = plugin_dir.join(format!("hive-{name}.md"));
-        if !skill_path.exists() {
-            std::fs::write(
-                &skill_path,
-                format!(
-                    "---\nname: hive:{name}\ndescription: {desc}\n---\n\nRun `hive {name}` to {desc}.\n"
-                ),
-            )?;
+            std::fs::set_permissions(&guard_script, std::fs::Permissions::from_mode(0o755))?;
         }
     }
 
@@ -241,105 +259,79 @@ fn generate_codex_adapter(repo_root: &Path) -> Result<()> {
 
     let instructions_path = codex_dir.join("instructions.md");
     if !instructions_path.exists() {
-        std::fs::write(
-            &instructions_path,
+        let mut content = String::from(
             "# Hive CLI Integration\n\n\
-             This project uses the Hive multi-agent orchestration harness.\n\n\
-             ## Available Commands\n\n\
-             - `hive init` -- Initialize a new hive project\n\
-             - `hive status` -- Show task status overview\n\
-             - `hive exec` -- Execute approved tasks\n\
-             - `hive check --task <id>` -- Verify acceptance criteria\n\
-             - `hive report --task <id>` -- Process task results\n\
-             - `hive merge --task <id>` -- Merge completed task branches\n\
-             - `hive retry --task <id>` -- Retry a failed task\n\
-             - `hive doctor` -- Diagnose project health\n\
-             - `hive audit` -- Query audit log\n\
-             - `hive graph` -- Display task dependency graph\n\n\
-             ## Working with Tasks\n\n\
-             Each task runs in an isolated git worktree. Do not modify files outside your assigned worktree.\n",
-        )?;
-    }
-
-    // Generate hooks.json
-    let hooks_path = codex_dir.join("hooks.json");
-    if !hooks_path.exists() {
-        let hooks = serde_json::json!({
-            "hooks": [
-                {
-                    "event": "pre-tool-use",
-                    "command": "if [ \"$HIVE_ROLE\" = \"orchestrator\" ] && echo \"$TOOL_NAME\" | grep -qE '^(Write|Edit|NotebookEdit)$'; then echo 'BLOCKED: orchestrator must not write files' >&2; exit 2; fi"
-                }
-            ]
-        });
-        std::fs::write(&hooks_path, serde_json::to_string_pretty(&hooks)?)?;
+             This project uses the Hive multi-agent orchestration harness.\n\
+             Each task runs in an isolated git worktree. Do not modify files outside your assigned worktree.\n\n\
+             ## Commands\n\n",
+        );
+        for (name, desc, _) in HIVE_SKILLS {
+            content.push_str(&format!("- `hive {name}` — {desc}\n"));
+        }
+        content.push_str(
+            "\n## Task Lifecycle\n\n\
+             - `hive claim --task <id>` — claim a pending task\n\
+             - `hive isolate --task <id>` — create isolated worktree\n\
+             - `hive launch --task <id>` — start agent in worktree\n\
+             - `hive report --task <id>` — process worker results\n\
+             - `hive retry --task <id>` — retry a failed task\n\
+             - `hive cleanup --task <id>` — remove worktree after merge\n\
+             - `hive audit --task <id>` — query per-task audit log\n\
+             - `hive show --task <id>` — show detailed task info\n\
+             - `hive list-tasks` — list all tasks\n",
+        );
+        std::fs::write(&instructions_path, content)?;
     }
 
     Ok(())
 }
 
-fn generate_generic_adapter(paths: &HivePaths) -> Result<()> {
+fn generate_generic_adapter(repo_root: &Path, paths: &HivePaths) -> Result<()> {
+    // AGENTS.md at repo root — works with opencode and other AI coding tools
+    let agents_md = repo_root.join("AGENTS.md");
+    if !agents_md.exists() {
+        let mut content = String::from(
+            "# Hive — Multi-Agent Orchestration\n\n\
+             This project uses the `hive` CLI for multi-agent task orchestration.\n\
+             Each task runs in an isolated git worktree. Do not modify files outside your assigned worktree.\n\n\
+             ## Core Commands\n\n",
+        );
+        for (name, desc, _) in HIVE_SKILLS {
+            content.push_str(&format!("- `hive {name}` — {desc}\n"));
+        }
+        content.push_str(
+            "\n## Task Lifecycle Commands\n\n\
+             - `hive claim --task <id>` — claim a pending task (acquires lock)\n\
+             - `hive isolate --task <id>` — create git worktree for the task\n\
+             - `hive launch --task <id>` — start agent in the task worktree\n\
+             - `hive check --task <id>` — verify acceptance criteria (exit: 0/1/2/3)\n\
+             - `hive report --task <id>` — process worker result.md\n\
+             - `hive retry --task <id>` — retry a failed task\n\
+             - `hive cleanup --task <id>` — remove worktree after merge\n\n\
+             ## Diagnostics\n\n\
+             - `hive audit --task <id>` — query per-task audit log\n\
+             - `hive show --task <id>` — show detailed task information\n\
+             - `hive list-tasks [--state <state>]` — list all tasks\n\
+             - `hive config --show` — display merged configuration\n\n\
+             ## Constraints\n\n\
+             - Workers must stay within their assigned worktree\n\
+             - Do not push to protected branches\n\
+             - State transitions are enforced by the CLI — do not edit state.json directly\n",
+        );
+        std::fs::write(&agents_md, content)?;
+        println!("generated AGENTS.md for generic/opencode tools");
+    }
+
+    // Also install to .hive/skills/ for skill-based tools
     let skill_dir = paths.skills_dir().join("hive-commands");
     std::fs::create_dir_all(&skill_dir)?;
-
     let skill_md = skill_dir.join("SKILL.md");
     if !skill_md.exists() {
         std::fs::write(
             &skill_md,
-            "---\nname: hive-commands\ndescription: Hive CLI orchestration commands\n---\n\n\
-             Generic adapter for hive CLI commands.\n",
+            "---\nname: hive-commands\ndescription: Hive CLI orchestration commands reference\n---\n\n\
+             See AGENTS.md at repo root for full command reference.\n",
         )?;
-    }
-
-    Ok(())
-}
-
-fn install_humanize_plugin(
-    repo_root: &Path,
-    paths: &HivePaths,
-    has_claude: bool,
-    has_codex: bool,
-) -> Result<()> {
-    // Always install to .hive/skills/humanize/ for all agent tools
-    let humanize_dir = paths.skills_dir().join("humanize");
-    if !humanize_dir.exists() {
-        std::fs::create_dir_all(&humanize_dir)?;
-        std::fs::write(
-            humanize_dir.join("SKILL.md"),
-            "---\nname: humanize\ndescription: Humanize RLCR quality loop integration\n---\n\n\
-             Default humanize plugin for quality assurance workflows.\n",
-        )?;
-    }
-
-    // For Claude Code: register in plugin.json
-    if has_claude {
-        let plugin_json_path = repo_root.join(".claude-plugin/plugin.json");
-        if plugin_json_path.exists() {
-            // Plugin reference is already in the generated adapter
-            println!("humanize: registered for Claude Code");
-        }
-    }
-
-    // For Codex: merge into instructions
-    if has_codex {
-        let instructions_path = repo_root.join(".codex/instructions.md");
-        if instructions_path.exists() {
-            let content = std::fs::read_to_string(&instructions_path)?;
-            if !content.contains("humanize") {
-                let mut updated = content;
-                updated.push_str(
-                    "\n## Humanize Integration\n\n\
-                     This project uses the humanize RLCR quality loop.\n\
-                     Use `gen-plan` for plan generation and `start-rlcr-loop` for iterative development.\n",
-                );
-                std::fs::write(&instructions_path, updated)?;
-            }
-            println!("humanize: merged into Codex instructions");
-        }
-    }
-
-    if !has_claude && !has_codex {
-        println!("humanize: installed to .hive/skills/humanize/");
     }
 
     Ok(())

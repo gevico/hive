@@ -1,3 +1,11 @@
 .codex
 .humanize/
 target/
+
+# Hive local files
+.hive/config.local.yml
+.hive/state.md
+.hive/specs/
+.hive/plans/
+.hive/tasks/
+.hive/worktrees/
