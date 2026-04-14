@@ -38,11 +38,8 @@ pub fn append_entry(
     let mut new_content = existing;
     new_content.push_str(&entry);
 
-    // Compute HMAC using ~/.config/hive/audit.key
-    let key = load_audit_key().unwrap_or_else(|| {
-        eprintln!("warning: audit key not found, integrity footer will use empty key");
-        Vec::new()
-    });
+    // Compute HMAC — key must exist, error propagated to caller
+    let key = load_audit_key()?;
     let hash = compute_hmac(&new_content, &key);
     new_content.push_str(&format!("# integrity: {hash}\n"));
 
@@ -72,40 +69,50 @@ fn compute_hmac(content: &str, key: &[u8]) -> String {
     hex::encode(mac.finalize().into_bytes())
 }
 
-/// Load the audit key from ~/.config/hive/audit.key (outside the repo tree).
-/// Workers in worktrees cannot access this key, making HMAC CLI-exclusive.
-/// Returns None if key is not found — callers must handle this as anomaly.
-fn load_audit_key() -> Option<Vec<u8>> {
-    // Primary: user config dir (~/.config/hive/audit.key)
-    if let Some(config_dir) = dirs_next::config_dir() {
-        let key_path = config_dir.join("hive").join("audit.key");
-        if let Ok(key) = std::fs::read(&key_path) {
-            return Some(key);
-        }
-    }
-    // No fallback — missing key is an explicit anomaly condition
-    None
+/// Load the audit key from ~/.config/hive/audit.key.
+/// Returns error if key path cannot be determined or key file doesn't exist.
+fn load_audit_key() -> HiveResult<Vec<u8>> {
+    let key_path = audit_key_path()?;
+    std::fs::read(&key_path).map_err(|e| {
+        hive_core::HiveError::Audit(format!(
+            "audit key not found at {}: {e}. Run `hive init` to generate it.",
+            key_path.display()
+        ))
+    })
 }
 
 /// Get the path where the audit key should be stored.
-pub fn audit_key_path() -> Option<std::path::PathBuf> {
-    dirs_next::config_dir().map(|d| d.join("hive").join("audit.key"))
+/// Respects `HIVE_AUDIT_KEY_PATH` env var for test isolation.
+/// Returns error if path cannot be determined.
+pub fn audit_key_path() -> HiveResult<std::path::PathBuf> {
+    // Test isolation: HIVE_AUDIT_KEY_PATH overrides default location
+    if let Ok(override_path) = std::env::var("HIVE_AUDIT_KEY_PATH") {
+        return Ok(std::path::PathBuf::from(override_path));
+    }
+    dirs_next::config_dir()
+        .map(|d| d.join("hive").join("audit.key"))
+        .ok_or_else(|| {
+            hive_core::HiveError::Audit(
+                "cannot determine user config directory for audit key".into(),
+            )
+        })
 }
 
-/// Ensure the audit key exists (generate if missing). Used by init and tests.
-pub fn ensure_audit_key() -> std::io::Result<()> {
-    if let Some(path) = audit_key_path()
-        && !path.exists() {
-            if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            use std::io::Read;
-            let mut key = [0u8; 32];
-            if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
-                let _ = f.read_exact(&mut key);
-            }
-            std::fs::write(&path, key)?;
+/// Ensure the audit key exists (generate if missing).
+/// Returns error if config dir is unavailable or key cannot be written.
+pub fn ensure_audit_key() -> HiveResult<()> {
+    let path = audit_key_path()?;
+    if !path.exists() {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
         }
+        use std::io::Read;
+        let mut key = [0u8; 32];
+        if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+            let _ = f.read_exact(&mut key);
+        }
+        std::fs::write(&path, key)?;
+    }
     Ok(())
 }
 
@@ -216,8 +223,8 @@ pub fn verify_integrity(audit_path: &Path) -> HiveResult<bool> {
 
     // Key must exist to verify — missing key = can't trust any audit
     let key = match load_audit_key() {
-        Some(k) => k,
-        None => return Ok(false), // No key = anomaly (can't verify)
+        Ok(k) => k,
+        Err(_) => return Ok(false), // No key = anomaly (can't verify)
     };
     let expected_hash = compute_hmac(&body, &key);
 
@@ -229,9 +236,17 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    /// Create an isolated audit key for this test via HIVE_AUDIT_KEY_PATH env var.
+    fn setup_test_key(tmp: &TempDir) {
+        let key_path = tmp.path().join("audit.key");
+        std::fs::write(&key_path, b"test-key-32-bytes-exactly-right!").unwrap();
+        unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", key_path.to_str().unwrap()) };
+    }
+
     #[test]
     fn append_and_read() {
         let tmp = TempDir::new().unwrap();
+        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         log_state_change(&path, AuditLevel::Standard, "t-01", "pending", "assigned").unwrap();
@@ -253,6 +268,7 @@ mod tests {
     #[test]
     fn level_filtering() {
         let tmp = TempDir::new().unwrap();
+        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         // Config at minimal — standard-level events should be skipped
@@ -269,6 +285,7 @@ mod tests {
     #[test]
     fn append_only() {
         let tmp = TempDir::new().unwrap();
+        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
 
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
@@ -282,8 +299,8 @@ mod tests {
 
     #[test]
     fn integrity_passes_for_untampered() {
-        ensure_audit_key().unwrap();
         let tmp = TempDir::new().unwrap();
+        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
         assert!(verify_integrity(&path).unwrap());
@@ -291,8 +308,8 @@ mod tests {
 
     #[test]
     fn integrity_fails_for_tampered_content() {
-        ensure_audit_key().unwrap();
         let tmp = TempDir::new().unwrap();
+        setup_test_key(&tmp);
         let path = tmp.path().join("audit.md");
         log_state_change(&path, AuditLevel::Standard, "t-01", "a", "b").unwrap();
 

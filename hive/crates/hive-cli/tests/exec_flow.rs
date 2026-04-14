@@ -17,6 +17,11 @@ impl TestRepo {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path().to_path_buf();
 
+        // Isolated audit key for this test (hermetic, no real ~/.config pollution)
+        let key_path = tmp.path().join("test-audit.key");
+        std::fs::write(&key_path, b"test-key-32-bytes-exactly-right!").unwrap();
+        unsafe { std::env::set_var("HIVE_AUDIT_KEY_PATH", key_path.to_str().unwrap()) };
+
         git(&root, &["init", "-b", "main"]);
         git(&root, &["config", "user.name", "Test User"]);
         git(&root, &["config", "user.email", "test@example.com"]);
@@ -75,11 +80,13 @@ impl TestRepo {
     }
 
     fn run_hive(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_hive"))
-            .args(args)
-            .current_dir(&self.root)
-            .output()
-            .unwrap()
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_hive"));
+        cmd.args(args).current_dir(&self.root);
+        // Pass isolated audit key path to subprocess
+        if let Ok(key_path) = std::env::var("HIVE_AUDIT_KEY_PATH") {
+            cmd.env("HIVE_AUDIT_KEY_PATH", key_path);
+        }
+        cmd.output().unwrap()
     }
 }
 

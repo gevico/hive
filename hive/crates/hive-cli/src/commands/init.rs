@@ -37,10 +37,9 @@ pub fn run() -> Result<()> {
     // Workers in worktrees cannot access this key, making HMAC CLI-exclusive
     hive_audit::ensure_audit_key()
         .with_context(|| "failed to generate audit key")?;
-    if let Some(kp) = hive_audit::audit_key_path()
-        && kp.exists() {
-            println!("audit key at {}", kp.display());
-        }
+    if let Ok(kp) = hive_audit::audit_key_path() {
+        println!("audit key at {}", kp.display());
+    }
 
     // Update .gitignore
     update_gitignore(&cwd)?;
