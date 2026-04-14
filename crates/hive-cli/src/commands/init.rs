@@ -175,6 +175,7 @@ const HIVE_SKILLS: &[(&str, &str, &str)] = &[
     ("rfc", "Generate RFC document for team review", "Run `hive rfc --draft <draft_id>` to aggregate all specs and plans for a draft into a single RFC document at `.hive/rfcs/<draft_id>.md`."),
     ("approve", "Approve a draft for execution after team review", "Run `hive approve --draft <draft_id>` to transition all specs under the draft to approved status, enabling `hive exec` to schedule them."),
     ("check", "Verify acceptance criteria for a task in review state", "Run `hive check --task <id>` to run all verifiers (command, file, manual) defined in the task spec.\n\nExit codes: 0=all pass, 1=some fail, 2=spec not found, 3=wrong state."),
+    ("plan", "Create task specs and implementation plans", "In v1, `hive plan` scaffolds spec and plan files for manual or tool-assisted editing.\n\nUsage:\n- `hive plan --draft <draft_id> --task <task_id>` — create spec at `.hive/specs/<task_id>.md` and plan at `.hive/plans/<draft_id>/<task_id>.md`\n\nUse external tools (e.g., humanize gen-plan) for automated plan generation, then feed the output into the hive spec/plan structure."),
     ("doctor", "Diagnose environment and project health", "Run `hive doctor` to validate git setup, agent tool availability, config syntax, state consistency, stale locks, worktree health, and audit integrity.\n\nExit codes: 0=healthy, 1=warnings, 2=errors."),
     ("graph", "Display task dependency graph", "Run `hive graph` to visualize the dependency relationships between all tasks."),
 ];
